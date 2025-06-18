@@ -585,6 +585,261 @@ def intelligent_keyword_extraction(query, user_context):
         return []
 
 # ==============================================================================
+#           PROJECT MANAGEMENT ENDPOINTS
+# ==============================================================================
+
+@app.route('/projects', methods=['GET'])
+@require_auth
+def get_user_projects(user):
+    """Obtiene todos los proyectos del usuario autenticado"""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT id, name, description, industry, stage, location, 
+                           website, is_active, created_at, updated_at, kpi_data, status
+                    FROM projects 
+                    WHERE user_id = :user_id 
+                    ORDER BY created_at DESC
+                """),
+                {"user_id": user['id']}
+            ).fetchall()
+            
+            projects = [dict(row) for row in result]
+            return jsonify({
+                "success": True,
+                "projects": projects,
+                "count": len(projects)
+            })
+            
+    except Exception as e:
+        print(f"❌ Error getting projects: {e}")
+        return jsonify({"error": "Could not fetch projects"}), 500
+
+@app.route('/projects', methods=['POST'])
+@require_auth
+def create_project(user):
+    """Crea un nuevo proyecto para el usuario"""
+    try:
+        data = request.get_json()
+        
+        # Validación de campos requeridos
+        if not data or 'name' not in data:
+            return jsonify({'error': 'Project name is required'}), 400
+        
+        if len(data['name'].strip()) < 2:
+            return jsonify({'error': 'Project name must be at least 2 characters'}), 400
+        
+        project_id = str(uuid.uuid4())
+        
+        with engine.connect() as conn:
+            # Crear proyecto
+            conn.execute(
+                text("""
+                    INSERT INTO projects (
+                        id, user_id, name, description, industry, stage, 
+                        location, website, is_active, created_at, updated_at
+                    ) VALUES (
+                        :id, :user_id, :name, :description, :industry, :stage,
+                        :location, :website, true, NOW(), NOW()
+                    )
+                """),
+                {
+                    "id": project_id,
+                    "user_id": user['id'],
+                    "name": data['name'].strip(),
+                    "description": data.get('description', '').strip(),
+                    "industry": data.get('industry', ''),
+                    "stage": data.get('stage', 'idea'),
+                    "location": data.get('location', ''),
+                    "website": data.get('website', '')
+                }
+            )
+            
+            # Inicializar neural memory para el proyecto
+            conn.execute(
+                text("""
+                    INSERT INTO neural_memory (user_id, project_id, memory_data, created_at, updated_at)
+                    VALUES (:user_id, :project_id, '{}', NOW(), NOW())
+                """),
+                {"user_id": user['id'], "project_id": project_id}
+            )
+            
+            conn.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": "Project created successfully",
+            "project_id": project_id
+        }), 201
+        
+    except Exception as e:
+        print(f"❌ Error creating project: {e}")
+        return jsonify({"error": "Could not create project"}), 500
+
+@app.route('/projects/<project_id>', methods=['GET'])
+@require_auth
+def get_project(user, project_id):
+    """Obtiene un proyecto específico del usuario"""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT p.*, nm.memory_data
+                    FROM projects p
+                    LEFT JOIN neural_memory nm ON p.id = nm.project_id
+                    WHERE p.id = :project_id AND p.user_id = :user_id
+                """),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not result:
+                return jsonify({"error": "Project not found"}), 404
+            
+            project_data = dict(result)
+            if project_data['memory_data']:
+                try:
+                    project_data['neural_memory'] = json.loads(project_data['memory_data'])
+                except:
+                    project_data['neural_memory'] = {}
+            
+            return jsonify({
+                "success": True,
+                "project": project_data
+            })
+            
+    except Exception as e:
+        print(f"❌ Error getting project: {e}")
+        return jsonify({"error": "Could not fetch project"}), 500
+
+@app.route('/projects/<project_id>', methods=['PUT'])
+@require_auth
+def update_project(user, project_id):
+    """Actualiza un proyecto del usuario"""
+    try:
+        data = request.get_json()
+        
+        with engine.connect() as conn:
+            # Verificar que el proyecto pertenece al usuario
+            project_check = conn.execute(
+                text("SELECT id FROM projects WHERE id = :project_id AND user_id = :user_id"),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not project_check:
+                return jsonify({"error": "Project not found"}), 404
+            
+            # Construir query de actualización dinámicamente
+            update_fields = []
+            update_params = {"project_id": project_id}
+            
+            allowed_fields = ['name', 'description', 'industry', 'stage', 'location', 'website', 'status']
+            for field in allowed_fields:
+                if field in data and data[field] is not None:
+                    update_fields.append(f"{field} = :{field}")
+                    update_params[field] = str(data[field]).strip() if isinstance(data[field], str) else data[field]
+            
+            if update_fields:
+                update_fields.append("updated_at = NOW()")
+                query = f"UPDATE projects SET {', '.join(update_fields)} WHERE id = :project_id"
+                
+                conn.execute(text(query), update_params)
+                conn.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": "Project updated successfully"
+        })
+        
+    except Exception as e:
+        print(f"❌ Error updating project: {e}")
+        return jsonify({"error": "Could not update project"}), 500
+
+@app.route('/projects/<project_id>', methods=['DELETE'])
+@require_auth
+def delete_project(user, project_id):
+    """Elimina un proyecto del usuario (soft delete)"""
+    try:
+        with engine.connect() as conn:
+            # Verificar que el proyecto pertenece al usuario
+            project_check = conn.execute(
+                text("SELECT id FROM projects WHERE id = :project_id AND user_id = :user_id"),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not project_check:
+                return jsonify({"error": "Project not found"}), 404
+            
+            # Soft delete (marcar como inactivo)
+            conn.execute(
+                text("UPDATE projects SET is_active = false, updated_at = NOW() WHERE id = :project_id"),
+                {"project_id": project_id}
+            )
+            conn.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": "Project deleted successfully"
+        })
+        
+    except Exception as e:
+        print(f"❌ Error deleting project: {e}")
+        return jsonify({"error": "Could not delete project"}), 500
+
+# ==============================================================================
+#           DOCUMENTS ENDPOINTS
+# ==============================================================================
+
+@app.route('/documents', methods=['GET'])
+@require_auth
+def get_user_documents_endpoint(user):
+    """Obtiene documentos generados por el usuario"""
+    try:
+        project_id = request.args.get('project_id')
+        document_type = request.args.get('type')
+        limit = int(request.args.get('limit', 20))
+        
+        # Construir query base
+        query = """
+            SELECT id, bot_used, document_type, title, format, metadata,
+                   credits_used, created_at, download_count, is_public, project_id
+            FROM generated_documents 
+            WHERE user_id = :user_id
+        """
+        params = {"user_id": user['id']}
+        
+        # Filtros opcionales
+        if project_id:
+            query += " AND project_id = :project_id"
+            params["project_id"] = project_id
+            
+        if document_type:
+            query += " AND document_type = :document_type"
+            params["document_type"] = document_type
+        
+        query += " ORDER BY created_at DESC LIMIT :limit"
+        params["limit"] = limit
+        
+        with engine.connect() as conn:
+            result = conn.execute(text(query), params).fetchall()
+            
+            documents = []
+            for doc in result:
+                doc_dict = dict(doc)
+                doc_dict['created_at'] = doc_dict['created_at'].isoformat()
+                documents.append(doc_dict)
+        
+        return jsonify({
+            "success": True,
+            "documents": documents,
+            "count": len(documents)
+        })
+        
+    except Exception as e:
+        print(f"❌ Error getting documents: {e}")
+        return jsonify({"error": "Could not fetch documents"}), 500
+
+# ==============================================================================
 #           ROUTES
 # ==============================================================================
 
@@ -708,24 +963,68 @@ def get_credits_balance(user):
 @app.route('/chat/bot', methods=['POST'])
 @require_auth
 def chat_with_bot(user):
-    """Chat con bot"""
+    """Procesa mensaje del usuario y retorna respuesta del bot"""
     try:
         data = request.get_json()
         if not data or 'message' not in data:
             return jsonify({'error': 'Message is required'}), 400
+            
+        # Obtener project context si se proporciona
+        project_id = data.get('project_id')
+        project_context = {}
         
-        bot_manager = BotManager()
+        if project_id:
+            try:
+                with engine.connect() as conn:
+                    # Obtener info del proyecto
+                    project_result = conn.execute(
+                        text("""
+                            SELECT p.*, nm.memory_data 
+                            FROM projects p
+                            LEFT JOIN neural_memory nm ON p.id = nm.project_id
+                            WHERE p.id = :project_id AND p.user_id = :user_id
+                        """),
+                        {"project_id": project_id, "user_id": user['id']}
+                    ).fetchone()
+                    
+                    if project_result:
+                        project_context = dict(project_result)
+                        if project_context.get('memory_data'):
+                            try:
+                                project_context['neural_memory'] = json.loads(project_context['memory_data'])
+                            except:
+                                project_context['neural_memory'] = {}
+            except Exception as e:
+                print(f"⚠️ Warning: Could not load project context: {e}")
+        
+        # Verificar créditos
+        if not has_sufficient_credits(user['id'], CREDIT_COSTS['basic_bot']):
+            return jsonify({
+                'error': 'Insufficient credits',
+                'required': CREDIT_COSTS['basic_bot'],
+                'available': get_user_credits(user['id'])
+            }), 402
+            
+        # Procesar mensaje con bot_manager
+        enhanced_context = {
+            'user_id': user['id'],
+            'user_plan': user['subscription_plan'],
+            'project_id': project_id,
+            'project_context': project_context,
+            **data.get('context', {})
+        }
+        
         response = bot_manager.process_user_request(
             data['message'],
-            data.get('context', {}),
+            enhanced_context,
             user['id']
         )
         
         return jsonify(response)
         
     except Exception as e:
-        print(f"Error in chat: {e}")
-        return jsonify({'error': str(e)}), 500
+        print(f"❌ Error in chat_with_bot: {e}")
+        return jsonify({'error': 'Could not process message'}), 500
 
 @app.route('/bots/available', methods=['GET'])
 @require_auth
