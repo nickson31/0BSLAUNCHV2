@@ -9,8 +9,10 @@ Sistema de créditos, suscripciones y memoria neuronal
 # ==============================================================================
 
 print("1. Loading libraries...")
-from flask import Flask, request, jsonify, session
+from flask import Flask, request, jsonify, session, redirect, url_for
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import pandas as pd
 import google.generativeai as genai
 import json
@@ -28,6 +30,11 @@ import jwt
 from functools import wraps
 import hashlib
 import bcrypt
+import requests
+
+# Google Auth
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 
 # ==============================================================================
 #           CONFIGURATION
@@ -35,21 +42,44 @@ import bcrypt
 
 print("2. Configuring application...")
 app = Flask(__name__)
-CORS(app, supports_credentials=True)
-app.secret_key = secrets.token_hex(16)
+
+# Rate Limiter Configuration
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"]
+)
+
+# CORS Configuration
+CORS(app, 
+     supports_credentials=True,
+     origins=[
+         'https://v0-0-bull-shit.vercel.app',
+         'http://localhost:3000',
+         'http://localhost:3001'
+     ],
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+     allow_headers=['Content-Type', 'Authorization'])
+
+app.secret_key = os.environ.get('JWT_SECRET', secrets.token_hex(16))
 warnings.filterwarnings('ignore')
 
 # Environment Variables
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")  # Para Opus4
 DATABASE_URL = os.environ.get("DATABASE_URL")
 JWT_SECRET = os.environ.get("JWT_SECRET", secrets.token_hex(32))
 UNIPILE_API_KEY = os.environ.get("UNIPILE_API_KEY")  # Para Pro plan
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://v0-0-bull-shit.vercel.app")
 
+# Verificar configuración crítica
 if not GEMINI_API_KEY:
     print("❌ FATAL: GEMINI_API_KEY not found.")
 if not DATABASE_URL:
     print("❌ FATAL: DATABASE_URL not found.")
+if not GOOGLE_CLIENT_ID:
+    print("⚠️ WARNING: GOOGLE_CLIENT_ID not found - Google Auth will not work")
 
 # Configure AI APIs
 try:
@@ -59,13 +89,121 @@ try:
 except Exception as e:
     print(f"❌ ERROR configuring Gemini: {e}")
 
-# Connect to Supabase
+# Connect to Database
 try:
     engine = sqlalchemy.create_engine(DATABASE_URL)
-    print("✅ Supabase connection established.")
+    print("✅ Database connection established.")
 except Exception as e:
-    print(f"❌ ERROR connecting to Supabase: {e}")
+    print(f"❌ ERROR connecting to database: {e}")
     engine = None
+
+# ==============================================================================
+#           SECURITY FUNCTIONS
+# ==============================================================================
+
+def validate_password(password):
+    """Valida que la contraseña cumpla con los requisitos"""
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters"
+    
+    if not re.search(r'[A-Z]', password):
+        return False, "Password must contain at least one uppercase letter"
+    
+    if not re.search(r'[a-z]', password):
+        return False, "Password must contain at least one lowercase letter"
+    
+    if not re.search(r'\d', password):
+        return False, "Password must contain at least one number"
+    
+    if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+        return False, "Password must contain at least one special character"
+    
+    return True, "Password is valid"
+
+def generate_refresh_token(user_id):
+    """Genera refresh token para el usuario"""
+    payload = {
+        'user_id': user_id,
+        'exp': datetime.utcnow() + timedelta(days=30),
+        'iat': datetime.utcnow(),
+        'type': 'refresh'
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm='HS256')
+
+def store_refresh_token(user_id, token):
+    """Almacena refresh token en la base de datos"""
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO refresh_tokens (
+                        user_id, token, expires_at
+                    ) VALUES (
+                        :user_id, :token, NOW() + INTERVAL '30 days'
+                    )
+                """),
+                {
+                    "user_id": user_id,
+                    "token": token
+                }
+            )
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"Error storing refresh token: {e}")
+        return False
+
+def verify_refresh_token(token):
+    """Verifica refresh token"""
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        if payload.get('type') != 'refresh':
+            return None
+            
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT * FROM refresh_tokens 
+                    WHERE token = :token 
+                    AND expires_at > NOW()
+                    AND revoked = false
+                """),
+                {"token": token}
+            ).fetchone()
+            
+            if result:
+                return payload['user_id']
+            return None
+    except Exception as e:
+        print(f"Error verifying refresh token: {e}")
+        return None
+
+def revoke_refresh_token(token):
+    """Revoca refresh token"""
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("""
+                    UPDATE refresh_tokens 
+                    SET revoked = true 
+                    WHERE token = :token
+                """),
+                {"token": token}
+            )
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"Error revoking refresh token: {e}")
+        return False
+
+# Security Headers Middleware
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    return response
 
 # ==============================================================================
 #           CONSTANTS AND CONFIGURATIONS
@@ -214,9 +352,23 @@ def get_user_by_id(user_id):
                 text("SELECT * FROM users WHERE id = :user_id"),
                 {"user_id": user_id}
             ).fetchone()
-            return dict(result) if result else None
+            
+            if result:
+                return {
+                    'id': result[0],
+                    'email': result[1],
+                    'password_hash': result[2] if len(result) > 2 else None,
+                    'first_name': result[3],
+                    'last_name': result[4],
+                    'subscription_plan': result[5],
+                    'credits': result[6],
+                    'auth_provider': result[7] if len(result) > 7 else 'manual',
+                    'google_id': result[8] if len(result) > 8 else None,
+                    'created_at': result[9] if len(result) > 9 else None
+                }
+            return None
     except Exception as e:
-        print(f"Error getting user: {e}")
+        print(f"Error getting user by ID: {e}")
         return None
 
 def get_user_by_email(email):
@@ -227,35 +379,78 @@ def get_user_by_email(email):
                 text("SELECT * FROM users WHERE email = :email"),
                 {"email": email}
             ).fetchone()
-            return dict(result) if result else None
+            
+            if result:
+                return {
+                    'id': result[0],
+                    'email': result[1],
+                    'password_hash': result[2] if len(result) > 2 else None,
+                    'first_name': result[3],
+                    'last_name': result[4],
+                    'subscription_plan': result[5],
+                    'credits': result[6],
+                    'auth_provider': result[7] if len(result) > 7 else 'manual',
+                    'google_id': result[8] if len(result) > 8 else None,
+                    'created_at': result[9] if len(result) > 9 else None
+                }
+            return None
     except Exception as e:
-        print(f"Error getting user: {e}")
+        print(f"Error getting user by email: {e}")
         return None
 
-def create_user(email, password, first_name, last_name):
+def get_user_by_google_id(google_id):
+    """Obtiene usuario por Google ID"""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("SELECT * FROM users WHERE google_id = :google_id"),
+                {"google_id": google_id}
+            ).fetchone()
+            
+            if result:
+                return {
+                    'id': result[0],
+                    'email': result[1],
+                    'password_hash': result[2] if len(result) > 2 else None,
+                    'first_name': result[3],
+                    'last_name': result[4],
+                    'subscription_plan': result[5],
+                    'credits': result[6],
+                    'auth_provider': result[7] if len(result) > 7 else 'manual',
+                    'google_id': result[8] if len(result) > 8 else None,
+                    'created_at': result[9] if len(result) > 9 else None
+                }
+            return None
+    except Exception as e:
+        print(f"Error getting user by Google ID: {e}")
+        return None
+
+def create_user(email, password=None, first_name="", last_name="", auth_provider="manual", google_id=None):
     """Crea nuevo usuario"""
     try:
-        hashed_password = hash_password(password)
         user_id = str(uuid.uuid4())
+        password_hash = hash_password(password) if password else None
         
         with engine.connect() as conn:
             conn.execute(
                 text("""
                     INSERT INTO users (
                         id, email, password_hash, first_name, last_name,
-                        subscription_plan, credits, created_at
+                        subscription_plan, credits, auth_provider, google_id, created_at
                     ) VALUES (
                         :id, :email, :password_hash, :first_name, :last_name,
-                        'free', :credits, NOW()
+                        'free', :credits, :auth_provider, :google_id, NOW()
                     )
                 """),
                 {
                     "id": user_id,
                     "email": email,
-                    "password_hash": hashed_password,
+                    "password_hash": password_hash,
                     "first_name": first_name,
                     "last_name": last_name,
-                    "credits": SUBSCRIPTION_PLANS['free']['launch_credits']
+                    "credits": SUBSCRIPTION_PLANS['free']['launch_credits'],
+                    "auth_provider": auth_provider,
+                    "google_id": google_id
                 }
             )
             conn.commit()
@@ -849,8 +1044,37 @@ def home():
     return jsonify({
         'status': 'online',
         'version': '2.0.0',
-        'message': '0Bullshit Backend API'
+        'message': '0Bullshit Backend API',
+        'auth_methods': ['manual', 'google'],
+        'database_connected': engine is not None,
+        'google_auth_enabled': GOOGLE_CLIENT_ID is not None
     })
+
+@app.route('/health')
+def health_check():
+    """Detailed health check"""
+    try:
+        # Test database connection
+        if engine:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            db_status = "connected"
+        else:
+            db_status = "disconnected"
+        
+        return jsonify({
+            'status': 'healthy',
+            'timestamp': datetime.utcnow().isoformat(),
+            'database': db_status,
+            'google_auth': 'enabled' if GOOGLE_CLIENT_ID else 'disabled',
+            'gemini_api': 'enabled' if GEMINI_API_KEY else 'disabled',
+            'environment': 'production' if 'render.com' in os.environ.get('RENDER_EXTERNAL_URL', '') else 'development'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e)
+        }), 500
 
 @app.route('/auth/register', methods=['POST'])
 def register():
@@ -907,12 +1131,17 @@ def login():
         if not user:
             return jsonify({'error': 'Invalid credentials'}), 401
         
+        # Verificar que sea usuario manual (no Google)
+        if user.get('auth_provider') != 'manual':
+            return jsonify({'error': 'Please use Google Sign-In for this account'}), 401
+        
         if not verify_password(data['password'], user['password_hash']):
             return jsonify({'error': 'Invalid credentials'}), 401
         
         token = generate_jwt_token(user['id'])
         
         return jsonify({
+            'success': True,
             'message': 'Login successful',
             'token': token,
             'user': {
@@ -921,13 +1150,102 @@ def login():
                 'first_name': user['first_name'],
                 'last_name': user['last_name'],
                 'subscription_plan': user['subscription_plan'],
-                'credits': user['credits']
+                'credits': user['credits'],
+                'auth_provider': user['auth_provider']
             }
         })
         
     except Exception as e:
         print(f"Error in login: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/auth/google', methods=['POST'])
+def google_auth():
+    """Autenticación con Google OAuth"""
+    try:
+        data = request.get_json()
+        if not data or not data.get('token'):
+            return jsonify({'error': 'Google token is required'}), 400
+        
+        # Verificar token de Google
+        try:
+            idinfo = id_token.verify_oauth2_token(
+                data['token'], 
+                google_requests.Request(), 
+                GOOGLE_CLIENT_ID
+            )
+            
+            if idinfo['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
+                raise ValueError('Wrong issuer.')
+                
+        except ValueError as e:
+            return jsonify({'error': 'Invalid Google token'}), 401
+        
+        # Extraer información del usuario
+        google_id = idinfo['sub']
+        email = idinfo['email']
+        first_name = idinfo.get('given_name', '')
+        last_name = idinfo.get('family_name', '')
+        
+        # Buscar usuario existente por Google ID
+        user = get_user_by_google_id(google_id)
+        
+        if not user:
+            # Buscar por email (puede ser un usuario manual existente)
+            user = get_user_by_email(email)
+            
+            if user:
+                # Usuario existe pero no tiene Google ID - actualizar
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(
+                            text("""
+                                UPDATE users 
+                                SET google_id = :google_id, auth_provider = 'google'
+                                WHERE id = :user_id
+                            """),
+                            {"google_id": google_id, "user_id": user['id']}
+                        )
+                        conn.commit()
+                        user['google_id'] = google_id
+                        user['auth_provider'] = 'google'
+                except Exception as e:
+                    print(f"Error updating user with Google ID: {e}")
+            else:
+                # Crear nuevo usuario con Google
+                user_id = create_user(
+                    email=email,
+                    first_name=first_name,
+                    last_name=last_name,
+                    auth_provider='google',
+                    google_id=google_id
+                )
+                if not user_id:
+                    return jsonify({'error': 'Failed to create user'}), 500
+                
+                user = get_user_by_id(user_id)
+        
+        # Generar token JWT
+        token = generate_jwt_token(user['id'])
+        
+        return jsonify({
+            'success': True,
+            'message': 'Google authentication successful',
+            'token': token,
+            'user': {
+                'id': user['id'],
+                'email': user['email'],
+                'first_name': user['first_name'],
+                'last_name': user['last_name'],
+                'subscription_plan': user['subscription_plan'],
+                'credits': user['credits'],
+                'auth_provider': user['auth_provider']
+            }
+        })
+        
+    except Exception as e:
+        print(f"Error in Google auth: {e}")
+        return jsonify({'error': 'Google authentication failed'}), 500
 
 @app.route('/user/profile', methods=['GET'])
 @require_auth
