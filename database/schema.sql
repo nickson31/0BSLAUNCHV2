@@ -13,44 +13,34 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- Users table
 CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    first_name VARCHAR(100) NOT NULL,
-    last_name VARCHAR(100) NOT NULL,
-    plan VARCHAR(20) DEFAULT 'free' CHECK (plan IN ('free', 'growth', 'pro')),
-    credits_balance INTEGER DEFAULT 100,
-    is_active BOOLEAN DEFAULT true,
-    is_admin BOOLEAN DEFAULT false,
+    password_hash VARCHAR(255) NOT NULL,
+    first_name VARCHAR(255) NOT NULL,
+    last_name VARCHAR(255) NOT NULL,
+    subscription_plan VARCHAR(50) NOT NULL DEFAULT 'free',
+    credits INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Subscriptions table
 CREATE TABLE subscriptions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    plan VARCHAR(20) NOT NULL CHECK (plan IN ('growth', 'pro')),
-    stripe_subscription_id VARCHAR(255) UNIQUE,
-    stripe_customer_id VARCHAR(255),
-    status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'cancelled', 'past_due', 'unpaid')),
-    current_period_start TIMESTAMP WITH TIME ZONE,
-    current_period_end TIMESTAMP WITH TIME ZONE,
-    cancel_at_period_end BOOLEAN DEFAULT false,
+    id UUID PRIMARY KEY,
+    user_id UUID REFERENCES users(id),
+    plan VARCHAR(50) NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'active',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id)
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Credit transactions log
 CREATE TABLE credit_transactions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    amount INTEGER NOT NULL, -- Positive for additions, negative for charges
-    transaction_type VARCHAR(20) NOT NULL CHECK (transaction_type IN ('add', 'charge', 'bonus', 'refund')),
+    id UUID PRIMARY KEY,
+    user_id UUID REFERENCES users(id),
+    amount INTEGER NOT NULL,
+    transaction_type VARCHAR(50) NOT NULL,
     description TEXT,
-    bot_used VARCHAR(100),
-    stripe_payment_intent_id VARCHAR(255),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -278,13 +268,12 @@ CREATE TABLE user_sessions (
 
 -- Users
 CREATE INDEX idx_users_email ON users(email);
-CREATE INDEX idx_users_plan ON users(plan);
+CREATE INDEX idx_users_plan ON users(subscription_plan);
 CREATE INDEX idx_users_created_at ON users(created_at);
 
 -- Subscriptions
 CREATE INDEX idx_subscriptions_user_id ON subscriptions(user_id);
 CREATE INDEX idx_subscriptions_status ON subscriptions(status);
-CREATE INDEX idx_subscriptions_stripe_id ON subscriptions(stripe_subscription_id);
 
 -- Credit transactions
 CREATE INDEX idx_credit_transactions_user_id ON credit_transactions(user_id);
@@ -432,8 +421,8 @@ CREATE VIEW user_activity_summary AS
 SELECT 
     u.id,
     u.email,
-    u.plan,
-    u.credits_balance,
+    u.subscription_plan,
+    u.credits,
     u.created_at as user_since,
     COALESCE(ni.interaction_count, 0) as total_interactions,
     COALESCE(ct.total_spent, 0) as total_credits_spent,
@@ -479,16 +468,16 @@ ORDER BY usage_count DESC;
 CREATE VIEW revenue_analytics AS
 SELECT 
     DATE_TRUNC('month', created_at) as month,
-    plan,
+    subscription_plan,
     COUNT(*) as new_subscriptions,
     COUNT(*) * CASE 
-        WHEN plan = 'growth' THEN 20
-        WHEN plan = 'pro' THEN 89
+        WHEN subscription_plan = 'growth' THEN 20
+        WHEN subscription_plan = 'pro' THEN 89
         ELSE 0
     END as monthly_recurring_revenue
 FROM subscriptions
 WHERE status = 'active'
-GROUP BY DATE_TRUNC('month', created_at), plan
-ORDER BY month DESC, plan;
+GROUP BY DATE_TRUNC('month', created_at), subscription_plan
+ORDER BY month DESC, subscription_plan;
 
 COMMENT ON SCHEMA public IS '0Bullshit Backend v2.0 - Complete database schema with users, bots, credits, search, outreach, and analytics';
