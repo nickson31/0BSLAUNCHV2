@@ -1252,7 +1252,7 @@ def google_auth():
             'message': 'Google authentication successful',
             'token': token,
             'user': {
-                'id': user['id'],
+                'id': str(user['id']),
                 'email': user['email'],
                 'first_name': user['first_name'],
                 'last_name': user['last_name'],
