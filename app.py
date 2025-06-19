@@ -73,6 +73,11 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://v0-0-bull-shit.vercel.app")
 
+# Debug info para Google Auth
+print(f"🔐 GOOGLE_CLIENT_ID configured: {'✅' if GOOGLE_CLIENT_ID else '❌'}")
+print(f"🗄️ DATABASE_URL configured: {'✅' if DATABASE_URL else '❌'}")
+print(f"🔑 JWT_SECRET configured: {'✅' if JWT_SECRET else '❌'}")
+
 # Verificar configuración crítica
 if not GEMINI_API_KEY:
     print("❌ FATAL: GEMINI_API_KEY not found.")
@@ -539,6 +544,15 @@ def log_credit_transaction(user_id, amount, transaction_type, description):
             conn.commit()
     except Exception as e:
         print(f"Error logging transaction: {e}")
+
+def has_sufficient_credits(user_id, required_amount):
+    """Verifica si el usuario tiene suficientes créditos"""
+    try:
+        current_credits = get_user_credits(user_id)
+        return current_credits >= required_amount
+    except Exception as e:
+        print(f"Error checking credits: {e}")
+        return False
 
 def update_subscription_plan(user_id, new_plan):
     """Actualiza el plan de suscripción del usuario"""
@@ -1161,31 +1175,32 @@ def login():
 
 @app.route('/auth/google', methods=['POST'])
 def google_auth():
-    """Autenticación con Google OAuth"""
+    """🔥 ENDPOINT GOOGLE AUTH ARREGLADO"""
     try:
+        print("🚀 Google auth endpoint called")
         data = request.get_json()
+        
         if not data or not data.get('token'):
+            print("❌ No token provided")
             return jsonify({'error': 'Google token is required'}), 400
         
-        # Verificar token de Google
-        try:
-            idinfo = id_token.verify_oauth2_token(
-                data['token'], 
-                google_requests.Request(), 
-                GOOGLE_CLIENT_ID
-            )
-            
-            if idinfo['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
-                raise ValueError('Wrong issuer.')
-                
-        except ValueError as e:
+        access_token = data['token']
+        print(f"🔑 Received access token (preview): {access_token[:20]}...")
+        
+        # 🔥 AQUÍ ESTABA EL BUG - Ahora usamos la función arreglada
+        user_info = verify_google_access_token(access_token)
+        
+        if not user_info:
+            print("❌ Failed to verify Google token")
             return jsonify({'error': 'Invalid Google token'}), 401
         
+        print(f"✅ Google token verified for user: {user_info['email']}")
+        
         # Extraer información del usuario
-        google_id = idinfo['sub']
-        email = idinfo['email']
-        first_name = idinfo.get('given_name', '')
-        last_name = idinfo.get('family_name', '')
+        google_id = user_info['google_id']
+        email = user_info['email']
+        first_name = user_info['first_name']
+        last_name = user_info['last_name']
         
         # Buscar usuario existente por Google ID
         user = get_user_by_google_id(google_id)
@@ -1209,8 +1224,9 @@ def google_auth():
                         conn.commit()
                         user['google_id'] = google_id
                         user['auth_provider'] = 'google'
+                        print(f"✅ Updated existing user with Google ID: {user['id']}")
                 except Exception as e:
-                    print(f"Error updating user with Google ID: {e}")
+                    print(f"❌ Error updating user with Google ID: {e}")
             else:
                 # Crear nuevo usuario con Google
                 user_id = create_user(
@@ -1224,9 +1240,12 @@ def google_auth():
                     return jsonify({'error': 'Failed to create user'}), 500
                 
                 user = get_user_by_id(user_id)
+                print(f"✅ Created new Google user: {user_id}")
         
         # Generar token JWT
         token = generate_jwt_token(user['id'])
+        
+        print(f"🎉 Google authentication successful for: {user['email']}")
         
         return jsonify({
             'success': True,
@@ -1244,7 +1263,7 @@ def google_auth():
         })
         
     except Exception as e:
-        print(f"Error in Google auth: {e}")
+        print(f"❌ Error in Google auth: {e}")
         return jsonify({'error': 'Google authentication failed'}), 500
 
 @app.route('/user/profile', methods=['GET'])
@@ -1582,6 +1601,67 @@ def upgrade_subscription(user):
     except Exception as e:
         print(f"Error upgrading subscription: {e}")
         return jsonify({'error': str(e)}), 500
+
+# ==============================================================================
+#           GOOGLE AUTH FUNCTIONS - ARREGLADAS
+# ==============================================================================
+
+def verify_google_access_token(access_token):
+    """
+    🔥 FUNCIÓN ARREGLADA - Verifica access_token con Google
+    Esta era la función que estaba mal antes
+    """
+    try:
+        print(f"🔍 Verifying Google access token...")
+        
+        # Usar Google's tokeninfo endpoint para validar el access_token
+        response = requests.get(
+            f'https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={access_token}',
+            timeout=10
+        )
+        
+        print(f"📡 Google API response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            print(f"❌ Google API error: {response.text}")
+            return None
+        
+        token_info = response.json()
+        print(f"📋 Token info received: {token_info}")
+        
+        # Verificar que el token es para nuestra app
+        if token_info.get('audience') != GOOGLE_CLIENT_ID:
+            print(f"❌ Token audience mismatch. Expected: {GOOGLE_CLIENT_ID}, Got: {token_info.get('audience')}")
+            return None
+        
+        # Obtener información del usuario usando el access_token
+        user_response = requests.get(
+            f'https://www.googleapis.com/oauth2/v2/userinfo?access_token={access_token}',
+            timeout=10
+        )
+        
+        if user_response.status_code != 200:
+            print(f"❌ Error getting user info: {user_response.text}")
+            return None
+        
+        user_info = user_response.json()
+        print(f"👤 User info received: {user_info}")
+        
+        return {
+            'google_id': user_info.get('id'),
+            'email': user_info.get('email'),
+            'first_name': user_info.get('given_name', ''),
+            'last_name': user_info.get('family_name', ''),
+            'picture': user_info.get('picture', ''),
+            'verified_email': user_info.get('verified_email', False)
+        }
+        
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Network error verifying Google token: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Unexpected error verifying Google token: {e}")
+        return None
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
