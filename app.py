@@ -1607,16 +1607,12 @@ def upgrade_subscription(user):
 # ==============================================================================
 
 def verify_google_access_token(access_token):
-    """
-    🔥 FUNCIÓN ARREGLADA - Verifica access_token con Google
-    Esta era la función que estaba mal antes
-    """
     try:
         print(f"🔍 Verifying Google access token...")
         
-        # Usar Google's tokeninfo endpoint para validar el access_token
+        # Usar userinfo endpoint en lugar de tokeninfo
         response = requests.get(
-            f'https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={access_token}',
+            f'https://www.googleapis.com/oauth2/v2/userinfo?access_token={access_token}',
             timeout=10
         )
         
@@ -1626,25 +1622,7 @@ def verify_google_access_token(access_token):
             print(f"❌ Google API error: {response.text}")
             return None
         
-        token_info = response.json()
-        print(f"📋 Token info received: {token_info}")
-        
-        # Verificar que el token es para nuestra app
-        if token_info.get('audience') != GOOGLE_CLIENT_ID:
-            print(f"❌ Token audience mismatch. Expected: {GOOGLE_CLIENT_ID}, Got: {token_info.get('audience')}")
-            return None
-        
-        # Obtener información del usuario usando el access_token
-        user_response = requests.get(
-            f'https://www.googleapis.com/oauth2/v2/userinfo?access_token={access_token}',
-            timeout=10
-        )
-        
-        if user_response.status_code != 200:
-            print(f"❌ Error getting user info: {user_response.text}")
-            return None
-        
-        user_info = user_response.json()
+        user_info = response.json()
         print(f"👤 User info received: {user_info}")
         
         return {
@@ -1656,11 +1634,8 @@ def verify_google_access_token(access_token):
             'verified_email': user_info.get('verified_email', False)
         }
         
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Network error verifying Google token: {e}")
-        return None
     except Exception as e:
-        print(f"❌ Unexpected error verifying Google token: {e}")
+        print(f"❌ Error verifying Google token: {e}")
         return None
 
 if __name__ == '__main__':
