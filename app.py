@@ -360,7 +360,7 @@ def get_user_by_id(user_id):
             
             if result:
                 return {
-                    'id': result[0],
+                    'id': str(result[0]),
                     'email': result[1],
                     'password_hash': result[2] if len(result) > 2 else None,
                     'first_name': result[3],
@@ -387,7 +387,7 @@ def get_user_by_email(email):
             
             if result:
                 return {
-                    'id': result[0],
+                    'id': str(result[0]),
                     'email': result[1],
                     'password_hash': result[2] if len(result) > 2 else None,
                     'first_name': result[3],
@@ -414,7 +414,7 @@ def get_user_by_google_id(google_id):
             
             if result:
                 return {
-                    'id': result[0],
+                    'id': str(result[0]),
                     'email': result[1],
                     'password_hash': result[2] if len(result) > 2 else None,
                     'first_name': result[3],
