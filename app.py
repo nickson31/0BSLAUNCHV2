@@ -47,14 +47,13 @@ app = Flask(__name__)
 # ==================== CORS KILLER - CONFIGURACIÓN NUCLEAR ====================
 print("🛡️ Configurando CORS KILLER...")
 
-CORS(app, 
-     origins=['*', 'http://localhost:3000', 'http://127.0.0.1:3000'], 
-     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH', 'HEAD'],
-     allow_headers=['*'],
-     expose_headers=['*'],
-     supports_credentials=False) 
-
-print("✅ CORS configurado con permisos totales")
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "methods": "*",
+        "allow_headers": "*"
+    }
+})
 
 # Rate Limiter Configuration
 limiter = Limiter(
@@ -110,66 +109,19 @@ except Exception as e:
 # ==============================================================================
 
 @app.before_request
-def handle_preflight():
-    """Maneja requests OPTIONS (preflight) automáticamente - CORS KILLER"""
-    origin = request.headers.get('Origin', 'unknown')
-    print(f"🌐 Request: {request.method} {request.path} from {origin}")
-    
+def handle_options():
     if request.method == "OPTIONS":
         response = make_response()
-        
-        # Lista específica de orígenes permitidos
-        allowed_origins = [
-            'http://localhost:3000',
-            'http://127.0.0.1:3000',
-            'https://v0-0-bull-shit.vercel.app'
-        ]
-        
-        # Si el origen está en la lista, permitirlo específicamente
-        if origin in allowed_origins:
-            response.headers.add("Access-Control-Allow-Origin", origin)
-        else:
-            response.headers.add("Access-Control-Allow-Origin", "*")
-        
-        response.headers.add('Access-Control-Allow-Headers', "*")
-        response.headers.add('Access-Control-Allow-Methods', "*")
-        response.headers.add('Access-Control-Allow-Credentials', 'false')  # ← IMPORTANTE
-        response.headers.add('Access-Control-Max-Age', '86400')
-        print(f"✅ Preflight handled for {request.path} from {origin}")
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "*" 
+        response.headers["Access-Control-Allow-Methods"] = "*"
         return response
 
 @app.after_request
-def after_request(response):
-    """Añade headers CORS a TODAS las respuestas - CORS KILLER"""
-    origin = request.headers.get('Origin')
-    
-    # Lista específica de orígenes permitidos
-    allowed_origins = [
-        'http://localhost:3000',
-        'http://127.0.0.1:3000', 
-        'https://v0-0-bull-shit.vercel.app'
-    ]
-    
-    # Si el origen está en la lista, permitirlo específicamente
-    if origin in allowed_origins:
-        response.headers.add("Access-Control-Allow-Origin", origin)
-    else:
-        response.headers.add("Access-Control-Allow-Origin", "*")
-    
-    # Headers CORS obligatorios
-    response.headers.add('Access-Control-Allow-Headers', 
-                        "Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, X-Auth-Token, XMLHttpRequest")
-    response.headers.add('Access-Control-Allow-Methods', 
-                        "GET, POST, OPTIONS, PUT, DELETE, PATCH, HEAD")
-    response.headers.add('Access-Control-Allow-Credentials', 'false')  # ← IMPORTANTE
-    response.headers.add('Access-Control-Expose-Headers', 
-                        "Authorization, Content-Type, Content-Length, X-Requested-With, Cache-Control")
-    
-    # Headers de seguridad adicionales
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "*"
     return response
 
 # ==============================================================================
