@@ -10,7 +10,7 @@ VERSIÓN COMPLETAMENTE ARREGLADA - Register funcionando 100% + Chat Sessions + C
 # ==============================================================================
 
 print("1. Loading libraries...")
-from flask import Flask, request, jsonify, session, redirect, url_for
+from flask import Flask, request, jsonify, session, redirect, url_for, make_response
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -54,10 +54,10 @@ limiter = Limiter(
 # ADVANCED CORS Configuration - COMPLETELY FIXED
 CORS(app, 
      supports_credentials=True,
-     origins=['*'],  # Allow all origins for development
-     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-     allow_headers=['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-     expose_headers=['Content-Type', 'Authorization'])
+     origins=['*'],
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH', 'HEAD'],
+     allow_headers=['*'],  
+     expose_headers=['*'])
 
 app.secret_key = os.environ.get('JWT_SECRET', secrets.token_hex(16))
 warnings.filterwarnings('ignore')
@@ -115,13 +115,14 @@ def handle_preflight():
 
 @app.after_request
 def after_request(response):
-    # Add CORS headers to every response
+    # CORS headers más agresivos
     response.headers.add("Access-Control-Allow-Origin", "*")
-    response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization,X-Requested-With,Accept,Origin")
-    response.headers.add('Access-Control-Allow-Methods', "GET,PUT,POST,DELETE,OPTIONS,PATCH")
+    response.headers.add('Access-Control-Allow-Headers', "*")  # ← CAMBIO
+    response.headers.add('Access-Control-Allow-Methods', "*")  # ← CAMBIO
     response.headers.add('Access-Control-Allow-Credentials', 'true')
+    response.headers.add('Access-Control-Expose-Headers', '*')  # ← NUEVO
     
-    # Add security headers
+    # Security headers
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-XSS-Protection'] = '1; mode=block'
