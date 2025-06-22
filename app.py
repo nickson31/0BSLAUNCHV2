@@ -1438,6 +1438,97 @@ def method_not_allowed(error):
 def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
+@app.route('/projects', methods=['POST'])
+@require_auth
+def create_project(user):
+    """Crea un nuevo proyecto para el usuario"""
+    try:
+        data = request.get_json()
+        
+        # Validar datos requeridos
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        required_fields = ['name']
+        for field in required_fields:
+            if field not in data or not data[field]:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+        
+        # Datos del proyecto
+        project_name = data['name'].strip()
+        description = data.get('description', '').strip()
+        industry = data.get('industry', '').strip()
+        stage = data.get('stage', 'ideation').strip()
+        location = data.get('location', '').strip()
+        
+        # Generar ID único para el proyecto
+        project_id = str(uuid.uuid4())
+        
+        # Guardar en memoria neuronal del usuario
+        try:
+            with engine.connect() as conn:
+                # Obtener memoria neuronal actual
+                result = conn.execute(
+                    text("SELECT memory_data FROM neural_memory WHERE user_id = :user_id"),
+                    {"user_id": user['id']}
+                ).fetchone()
+                
+                if result and result[0]:
+                    memory_data = json.loads(result[0])
+                else:
+                    memory_data = {}
+                
+                # Añadir proyecto a la memoria
+                if 'projects' not in memory_data:
+                    memory_data['projects'] = []
+                
+                # Crear objeto proyecto
+                project = {
+                    'id': project_id,
+                    'name': project_name,
+                    'description': description,
+                    'industry': industry,
+                    'stage': stage,
+                    'location': location,
+                    'created_at': datetime.now().isoformat(),
+                    'updated_at': datetime.now().isoformat(),
+                    'is_active': True
+                }
+                
+                # Añadir proyecto
+                memory_data['projects'].append(project)
+                
+                # Actualizar memoria neuronal
+                conn.execute(
+                    text("""
+                        UPDATE neural_memory 
+                        SET memory_data = :memory_data, updated_at = NOW()
+                        WHERE user_id = :user_id
+                    """),
+                    {
+                        "memory_data": json.dumps(memory_data),
+                        "user_id": user['id']
+                    }
+                )
+                conn.commit()
+                
+                print(f"✅ Project created successfully: {project_id} for user {user['id']}")
+                
+                return jsonify({
+                    'success': True,
+                    'message': 'Project created successfully',
+                    'project': project
+                }), 201
+                
+        except Exception as db_error:
+            print(f"❌ Database error creating project: {db_error}")
+            return jsonify({'error': 'Database error'}), 500
+            
+    except Exception as e:
+        print(f"❌ Error creating project: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Internal server error: {str(e)}'}), 500
 # ==============================================================================
 #           MAIN
 # ==============================================================================
