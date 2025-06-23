@@ -37,6 +37,7 @@ from werkzeug.utils import secure_filename
 from werkzeug.datastructures import FileStorage
 import PyPDF2
 import docx
+import mimetypes
 
 # Google Auth
 from google.oauth2 import id_token
@@ -277,13 +278,13 @@ def require_auth(f):
     return decorated_function
 
 def get_user_by_id(user_id):
-    """Obtiene usuario por ID"""
+    """Obtiene usuario por ID - CORREGIDO para tu esquema EXACTO"""
     try:
         with engine.connect() as conn:
             result = conn.execute(
                 text("""
                     SELECT id, email, password_hash, first_name, last_name, 
-                           subscription_plan, credits, auth_provider, google_id, 
+                           plan, credits, auth_provider, google_id, 
                            is_active, is_admin, created_at, updated_at
                     FROM users 
                     WHERE id = :user_id
@@ -298,28 +299,29 @@ def get_user_by_id(user_id):
                     'password_hash': result[2],
                     'first_name': result[3] or '',
                     'last_name': result[4] or '',
-                    'subscription_plan': result[5] or 'free',
+                    'subscription_plan': result[5] or 'free',  # Mapear "plan" a "subscription_plan"
+                    'plan': result[5] or 'free',  # También mantener plan original
                     'credits': result[6] or 100,
                     'auth_provider': result[7] or 'manual',
                     'google_id': result[8],
-                    'is_active': result[9] if len(result) > 9 else True,
-                    'is_admin': result[10] if len(result) > 10 else False,
-                    'created_at': result[11] if len(result) > 11 else None,
-                    'updated_at': result[12] if len(result) > 12 else None
+                    'is_active': result[9] if result[9] is not None else True,
+                    'is_admin': result[10] if result[10] is not None else False,
+                    'created_at': result[11],
+                    'updated_at': result[12]
                 }
             return None
     except Exception as e:
-        print(f"Error getting user by ID: {e}")
+        print(f"❌ Error getting user by ID: {e}")
         return None
 
 def get_user_by_email(email):
-    """Obtiene usuario por email"""
+    """Obtiene usuario por email - CORREGIDO para tu esquema EXACTO"""
     try:
         with engine.connect() as conn:
             result = conn.execute(
                 text("""
                     SELECT id, email, password_hash, first_name, last_name, 
-                           subscription_plan, credits, auth_provider, google_id, 
+                           plan, credits, auth_provider, google_id, 
                            is_active, is_admin, created_at, updated_at
                     FROM users 
                     WHERE email = :email
@@ -334,18 +336,19 @@ def get_user_by_email(email):
                     'password_hash': result[2],
                     'first_name': result[3] or '',
                     'last_name': result[4] or '',
-                    'subscription_plan': result[5] or 'free',
+                    'subscription_plan': result[5] or 'free',  # Mapear "plan" a "subscription_plan"
+                    'plan': result[5] or 'free',  # También mantener plan original
                     'credits': result[6] or 100,
                     'auth_provider': result[7] or 'manual',
                     'google_id': result[8],
-                    'is_active': result[9] if len(result) > 9 else True,
-                    'is_admin': result[10] if len(result) > 10 else False,
-                    'created_at': result[11] if len(result) > 11 else None,
-                    'updated_at': result[12] if len(result) > 12 else None
+                    'is_active': result[9] if result[9] is not None else True,
+                    'is_admin': result[10] if result[10] is not None else False,
+                    'created_at': result[11],
+                    'updated_at': result[12]
                 }
             return None
     except Exception as e:
-        print(f"Error getting user by email: {e}")
+        print(f"❌ Error getting user by email: {e}")
         return None
 
 def get_user_by_google_id(google_id):
@@ -450,12 +453,12 @@ def get_user_credits(user_id):
         return 0
 
 def charge_credits(user_id, amount):
-    """Cobra créditos al usuario CON LOGS DETALLADOS"""
+    """Cobra créditos al usuario - PERFECTO para tu esquema"""
     try:
-        print(f"💸 Intentando cobrar {amount} créditos al usuario {user_id}")
+        print(f"💸 Cobrando {amount} créditos al usuario {user_id}")
         
         with engine.connect() as conn:
-            # Primero verificar créditos actuales
+            # Verificar créditos actuales
             current_result = conn.execute(
                 text("SELECT credits FROM users WHERE id = :user_id"),
                 {"user_id": user_id}
@@ -465,14 +468,14 @@ def charge_credits(user_id, amount):
                 print(f"❌ Usuario {user_id} no encontrado")
                 return None
             
-            current_credits = current_result[0]
+            current_credits = current_result[0] or 0
             print(f"💰 Créditos actuales: {current_credits}")
             
             if current_credits < amount:
                 print(f"❌ Créditos insuficientes: {current_credits} < {amount}")
                 return None
             
-            # Hacer el cobro
+            # Hacer el cobro - updated_at existe en tu tabla
             result = conn.execute(
                 text("""
                     UPDATE users 
@@ -488,13 +491,14 @@ def charge_credits(user_id, amount):
                 new_credits = result[0]
                 conn.commit()
                 
-                print(f"✅ Cobro exitoso:")
-                print(f"   - Antes: {current_credits}")
-                print(f"   - Cobrado: {amount}")
-                print(f"   - Después: {new_credits}")
+                print(f"✅ Cobro exitoso: {current_credits} -> {new_credits}")
                 
-                # Log the transaction
-                log_credit_transaction(user_id, -amount, 'charge', 'Bot usage')
+                # Log transaction - tu tabla credit_transactions existe
+                try:
+                    log_credit_transaction(user_id, -amount, 'charge', 'Bot usage')
+                except Exception as log_error:
+                    print(f"⚠️ Error logging transaction: {log_error}")
+                
                 return new_credits
             else:
                 print(f"❌ Error en UPDATE de créditos")
@@ -505,7 +509,7 @@ def charge_credits(user_id, amount):
         import traceback
         traceback.print_exc()
         return None
-
+        
 def add_credits(user_id, amount, reason='purchase'):
     """Agrega créditos al usuario"""
     try:
@@ -530,7 +534,7 @@ def add_credits(user_id, amount, reason='purchase'):
         return None
 
 def log_credit_transaction(user_id, amount, transaction_type, description):
-    """Registra transacción de créditos"""
+    """Registra transacción de créditos - PERFECTO para tu esquema"""
     try:
         with engine.connect() as conn:
             conn.execute(
@@ -650,7 +654,10 @@ def init_neural_memory(user_id):
         print(f"❌ Error initializing neural memory: {e}")
 
 def save_neural_interaction(user_id, interaction_data):
-    """Guarda interacción en memoria neuronal CON TÍTULO GENERADO POR GEMINI"""
+    """
+    Guarda interacción en memoria neuronal - OPTIMIZADO para tu esquema
+    Todas las columnas existen en tu DB, así que esta función es PERFECTA
+    """
     try:
         interaction_id = str(uuid.uuid4())
         
@@ -688,6 +695,9 @@ def save_neural_interaction(user_id, interaction_data):
     
     except Exception as e:
         print(f"❌ Error saving interaction: {e}")
+        import traceback
+        traceback.print_exc()
+
 
 def check_and_generate_session_title(session_id, user_id, interaction_data):
     """Genera título para la sesión si es la primera interacción"""
@@ -944,7 +954,7 @@ def merge_memory_data(current_memory, new_info):
 
 def get_project_context_for_chat(user_id, project_id):
     """
-    Obtiene el contexto completo del proyecto para el chat
+    Obtiene el contexto completo del proyecto para el chat - OPTIMIZADO
     """
     try:
         with engine.connect() as conn:
@@ -973,13 +983,13 @@ def get_project_context_for_chat(user_id, project_id):
                 {"user_id": user_id, "project_id": project_id}
             ).fetchall()
             
-            # Obtener documentos del proyecto
+            # Obtener documentos del proyecto usando el extract function que ya existe en tu DB
             project_docs = conn.execute(
                 text("""
                     SELECT document_type, title, created_at 
                     FROM generated_documents 
                     WHERE user_id = :user_id 
-                    AND JSON_EXTRACT(metadata, '$.project_id') = :project_id
+                    AND extract_project_id_from_metadata(metadata) = :project_id
                     ORDER BY created_at DESC
                 """),
                 {"user_id": user_id, "project_id": project_id}
@@ -1025,9 +1035,7 @@ def get_project_context_for_chat(user_id, project_id):
         return {}
 
 def generate_context_summary(business_context, recent_chats):
-    """
-    Genera un resumen del contexto para incluir en prompts
-    """
+    """Genera un resumen del contexto para incluir en prompts"""
     try:
         summary_parts = []
         
@@ -1056,15 +1064,31 @@ def generate_context_summary(business_context, recent_chats):
     except Exception as e:
         print(f"❌ Error generating context summary: {e}")
         return "Error generando resumen de contexto"
+
+def get_enhanced_context_for_chat(user, session_id, project_id, data):
+    """Obtiene contexto mejorado para el chat"""
+    
+    # Obtener contexto del proyecto
+    project_context = get_project_context_for_chat(user['id'], project_id)
+    
+    # Contexto base
+    enhanced_context = {
+        'user_id': user['id'],
+        'user_plan': user.get('subscription_plan', user.get('plan', 'free')),  # Compatibilidad
+        'session_id': session_id,
+        'project_id': project_id,
+        'user_credits_before': get_user_credits(user['id']),
+        **data.get('context', {}),
+        **project_context
+    }
+    
+    return enhanced_context
         
 # ==============================================================================
 #           BOT SYSTEM
 # ==============================================================================
 
 class BotManager:
-    def __init__(self):
-        pass
-    
     def process_user_request(self, user_input, user_context, user_id):
         """Procesa request del usuario con tracking correcto de créditos"""
         try:
@@ -1085,23 +1109,18 @@ class BotManager:
                 }
             
             # 2. GENERAR RESPUESTA CON GEMINI
-            prompt = f"""
-            Eres un asistente experto en startups y emprendimiento.
-            
-            Usuario pregunta: {user_input}
-            
-            Contexto del usuario:
-            - Plan: {user_context.get('user_plan', 'free')}
-            - Industria: {user_context.get('industry', 'No especificada')}
-            - Etapa: {user_context.get('stage', 'No especificada')}
-            
-            Responde de forma útil, práctica y accionable en el mismo idioma que usa el usuario.
-            Si escriben en inglés, responde en inglés. Si escriben en español, responde en español. Si es en francés, responde en francés. Cualquier idioma.
-            Responde de forma útil, práctica y accionable en el mismo idioma que usa el usuario, ajustando la longitud entre 50-1000 palabras según la complejidad/input/prompt de la pregunta del usuario.
-            """
+            prompt = self._build_smart_prompt(user_input, user_context)
             
             model = genai.GenerativeModel(MODEL_NAME)
-            ai_response = model.generate_content(prompt)
+            ai_response = model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.7,
+                    "top_p": 0.95,
+                    "top_k": 40,
+                    "max_output_tokens": 2000,
+                }
+            )
             
             # 3. COBRAR CRÉDITOS
             print(f"💳 Cobrando {required_credits} créditos...")
@@ -1114,7 +1133,7 @@ class BotManager:
             
             # 4. GUARDAR INTERACCIÓN
             save_neural_interaction(user_id, {
-                'bot': 'basic_bot',
+                'bot': 'interactive_mentor',
                 'input': user_input,
                 'response': ai_response.text,
                 'credits_used': required_credits,
@@ -1125,7 +1144,7 @@ class BotManager:
             
             # 5. RETORNAR RESPUESTA
             return {
-                'bot': 'basic_bot',
+                'bot': 'interactive_mentor',
                 'response': ai_response.text,
                 'credits_charged_by_bot': required_credits,
                 'processing_success': True
@@ -1137,9 +1156,65 @@ class BotManager:
             traceback.print_exc()
             return {'error': f'Bot error: {str(e)}'}
 
+
+
+def _build_smart_prompt(self, user_input, user_context):
+        """Construye prompt inteligente basado en contexto"""
+        # Obtener información del contexto
+        business_context = user_context.get('business_context', {})
+        user_plan = user_context.get('user_plan', 'free')
+        recent_conversations = user_context.get('recent_conversation_context', [])
+        
+        prompt = f"""
+        Eres un mentor de startups experto y experimentado. Has ayudado a crear 50+ startups exitosas.
+        
+        CONTEXTO DEL PROYECTO:
+        - Industria: {business_context.get('industry', 'No especificada')}
+        - Etapa: {business_context.get('stage', 'Inicial')}
+        - Tipo: {business_context.get('business_type', 'Proyecto')}
+        - Problema que resuelve: {business_context.get('problem_solving', 'No definido')}
+        - Plan del usuario: {user_plan}
+        
+        CONVERSACIONES RECIENTES:
+        {self._format_recent_conversations(recent_conversations)}
+        
+        DOCUMENTOS CREADOS:
+        {user_context.get('documents_created', [])}
+        
+        USUARIO PREGUNTA: {user_input}
+        
+        INSTRUCCIONES:
+        - Responde como mentor experimentado, no como AI
+        - Da consejos prácticos y accionables
+        - Si pide documentos (pitch deck, business plan), ofrécete a generarlos
+        - Sé honesto sobre los retos del emprendimiento
+        - Usa ejemplos reales cuando sea apropiado
+        - Ajusta tu respuesta al nivel (idea vs startup real)
+        - Responde en el mismo idioma que el usuario
+        - Longitud: 100-800 palabras según la complejidad
+        
+        Si el plan es 'free' y necesita features avanzadas, menciona los benefits del upgrade de forma natural.
+        
+        Responde de forma directa, práctica y útil:
+        """
+        
+        return prompt
+
+def _format_recent_conversations(self, conversations):
+        """Formatea conversaciones recientes para contexto"""
+        if not conversations:
+            return "No hay conversaciones previas"
+        
+        formatted = []
+        for conv in conversations[-3:]:  # Últimas 3
+            formatted.append(f"- Usuario dijo: {conv.get('user_said', '')}")
+            formatted.append(f"- Asistente respondió: {conv.get('assistant_responded', '')}")
+        
+        return '\n'.join(formatted)
+
+
 # Actualizar la instancia global (ESTA LÍNEA YA EXISTE, NO LA CAMBIES)
 bot_manager = BotManager()
-
 # ==============================================================================
 #           ROUTES
 # ==============================================================================
@@ -2147,7 +2222,7 @@ def handle_projects(user):
 @app.route('/chat/recent', methods=['GET'])
 @require_auth
 def get_recent_chats_with_titles(user):
-    """Obtiene chats recientes con títulos generados por Gemini"""
+    """Obtiene chats recientes con títulos - OPTIMIZADO para tu esquema exacto"""
     try:
         limit = min(int(request.args.get('limit', 20)), 50)
         project_id = request.args.get('project_id')
@@ -2187,13 +2262,13 @@ def get_recent_chats_with_titles(user):
             chats = []
             for row in result:
                 # Si no hay título, generarlo ahora
-                display_title = row[9] if row[9] else generate_chat_title_from_messages(row[6], row[7])
+                display_title = row[9] if row[9] else generate_simple_title_from_message(row[6], row[7])
                 
                 chats.append({
                     'session_id': row[0],
                     'project_id': str(row[1]) if row[1] else None,
                     'project_name': row[2] or 'Sin proyecto',
-                    'title': display_title,  # ¡AQUÍ ESTÁ EL TÍTULO!
+                    'title': display_title,  # ¡TÍTULO AQUÍ!
                     'started_at': row[3].isoformat(),
                     'last_message_at': row[4].isoformat(),
                     'message_count': row[5],
