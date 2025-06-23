@@ -1120,10 +1120,11 @@ def get_credits_balance(user):
 def create_new_chat(user):
     """
     Crea una nueva conversación asociada a un proyecto
+    VERSIÓN FINAL - Ahora que la tabla projects está correcta
     
     REQUEST BODY:
     {
-        "project_id": "uuid-required"  // OBLIGATORIO AHORA
+        "project_id": "uuid-optional"  // OPCIONAL
     }
     
     RESPONSE:
@@ -1131,47 +1132,117 @@ def create_new_chat(user):
         "success": true,
         "session_id": "uuid",
         "project_id": "uuid", 
-        "message": "New chat session created for project"
+        "message": "New chat session created successfully"
     }
     """
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
+        project_id = data.get('project_id')
         
-        # VALIDAR que project_id esté presente
-        if not data or not data.get('project_id'):
-            return jsonify({'error': 'project_id is required'}), 400
-        
-        project_id = data['project_id']
-        
-        # VERIFICAR que el proyecto pertenece al usuario
-        with engine.connect() as conn:
-            project_check = conn.execute(
-                text("SELECT id FROM projects WHERE id = :project_id AND user_id = :user_id"),
-                {"project_id": project_id, "user_id": user['id']}
-            ).fetchone()
+        # Si no hay project_id, buscar o crear uno
+        if not project_id:
+            print("🔍 No project_id provided, looking for user's projects...")
             
-            if not project_check:
-                return jsonify({'error': 'Project not found or access denied'}), 404
+            with engine.connect() as conn:
+                # Buscar proyectos existentes del usuario
+                project_result = conn.execute(
+                    text("""
+                        SELECT id FROM projects 
+                        WHERE user_id = :user_id 
+                        ORDER BY created_at DESC 
+                        LIMIT 1
+                    """),
+                    {"user_id": user['id']}
+                ).fetchone()
+                
+                if project_result:
+                    project_id = str(project_result[0])
+                    print(f"✅ Using existing project: {project_id}")
+                else:
+                    # Crear proyecto por defecto
+                    project_id = str(uuid.uuid4())
+                    print(f"📝 Creating default project: {project_id}")
+                    
+                    conn.execute(
+                        text("""
+                            INSERT INTO projects (
+                                id, user_id, project_name, project_description, 
+                                kpi_data, status, created_at
+                            ) VALUES (
+                                :id, :user_id, :project_name, :project_description, 
+                                :kpi_data, :status, NOW()
+                            )
+                        """),
+                        {
+                            "id": project_id,
+                            "user_id": user['id'],
+                            "project_name": "Mi Proyecto Principal",
+                            "project_description": "Proyecto creado automáticamente para el chat",
+                            "kpi_data": json.dumps({
+                                "created_automatically": True,
+                                "creation_source": "chat_new_endpoint",
+                                "created_at": datetime.now().isoformat()
+                            }),
+                            "status": "ONBOARDING"
+                        }
+                    )
+                    conn.commit()
+                    print(f"✅ Default project created successfully: {project_id}")
+        else:
+            # Verificar que el proyecto existe y pertenece al usuario
+            with engine.connect() as conn:
+                project_check = conn.execute(
+                    text("""
+                        SELECT id, project_name FROM projects 
+                        WHERE id = :project_id AND user_id = :user_id
+                    """),
+                    {"project_id": project_id, "user_id": user['id']}
+                ).fetchone()
+                
+                if not project_check:
+                    return jsonify({
+                        'error': 'Project not found or access denied',
+                        'provided_project_id': project_id,
+                        'user_id': user['id'],
+                        'suggestion': 'Create a new chat without project_id to auto-create a project'
+                    }), 404
+                else:
+                    print(f"✅ Project verified: {project_check[1]} ({project_id})")
         
+        # Generar session_id único para el chat
         session_id = str(uuid.uuid4())
+        
+        print(f"🎉 New chat session created successfully:")
+        print(f"   - User: {user['id']}")
+        print(f"   - Project: {project_id}")
+        print(f"   - Session: {session_id}")
         
         return jsonify({
             'success': True,
             'session_id': session_id,
             'project_id': project_id,
-            'message': 'New chat session created for project'
+            'message': 'New chat session created successfully',
+            'user_id': user['id'],
+            'timestamp': datetime.now().isoformat()
         })
         
     except Exception as e:
         print(f"❌ Error creating new chat: {e}")
-        return jsonify({'error': 'Could not create new chat session'}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'error': 'Could not create new chat session',
+            'details': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 
 @app.route('/chat/bot', methods=['POST'])
 @require_auth
 def chat_with_bot(user):
     """
     Procesa mensaje del usuario y retorna respuesta del bot
-    CON PROJECT_ID Y SESSION_ID OBLIGATORIOS
+    VERSIÓN MEJORADA - Compatible con la nueva estructura
     """
     try:
         data = request.get_json()
@@ -1182,19 +1253,22 @@ def chat_with_bot(user):
             
         if not data.get('message'):
             return jsonify({'error': 'Message is required'}), 400
-            
-        if not data.get('project_id'):
-            return jsonify({'error': 'project_id is required'}), 400
         
-        # SESSION_ID: Si no existe, crear uno nuevo
+        # PROJECT_ID Y SESSION_ID son requeridos ahora
+        project_id = data.get('project_id')
         session_id = data.get('session_id')
-        if not session_id:
-            session_id = str(uuid.uuid4())
-            is_new_chat = True
-        else:
-            is_new_chat = False
         
-        project_id = data['project_id']
+        if not project_id:
+            return jsonify({
+                'error': 'project_id is required',
+                'suggestion': 'Use /chat/new to create a new chat session first'
+            }), 400
+        
+        if not session_id:
+            return jsonify({
+                'error': 'session_id is required',
+                'suggestion': 'Use /chat/new to create a new chat session first'
+            }), 400
         
         # VERIFICAR que el proyecto pertenece al usuario
         with engine.connect() as conn:
@@ -1208,7 +1282,11 @@ def chat_with_bot(user):
             ).fetchone()
             
             if not project_result:
-                return jsonify({'error': 'Project not found or access denied'}), 404
+                return jsonify({
+                    'error': 'Project not found or access denied',
+                    'project_id': project_id,
+                    'user_id': user['id']
+                }), 404
         
         # EXTRAER CONTEXTO DEL PROYECTO
         project_context = {
@@ -1218,7 +1296,7 @@ def chat_with_bot(user):
             'project_data': json.loads(project_result[3]) if project_result[3] else {}
         }
         
-        # OBTENER CRÉDITOS ACTUALES
+        # VERIFICAR CRÉDITOS
         user_credits_before = get_user_credits(user['id'])
         credits_required = CREDIT_COSTS.get('basic_bot', 5)
         
@@ -1230,13 +1308,12 @@ def chat_with_bot(user):
                 'upgrade_needed': True
             }), 402
             
-        # PREPARAR CONTEXTO MEJORADO
+        # PREPARAR CONTEXTO COMPLETO
         enhanced_context = {
             'user_id': user['id'],
             'user_plan': user['subscription_plan'],
             'session_id': session_id,
             'project_id': project_id,
-            'is_new_chat': is_new_chat,
             'user_credits_before': user_credits_before,
             **project_context,
             **data.get('context', {})
@@ -1252,7 +1329,7 @@ def chat_with_bot(user):
         if 'error' in response:
             return jsonify(response), 400
         
-        # GUARDAR INTERACCIÓN CON TODAS LAS COLUMNAS
+        # GUARDAR INTERACCIÓN EN NEURAL_INTERACTIONS
         try:
             with engine.connect() as conn:
                 conn.execute(
@@ -1282,19 +1359,19 @@ def chat_with_bot(user):
         except Exception as e:
             print(f"⚠️ Warning: Could not save interaction: {e}")
         
-        # CALCULAR CRÉDITOS USADOS
+        # CALCULAR CRÉDITOS FINALES
         user_credits_after = get_user_credits(user['id'])
         credits_actually_used = user_credits_before - user_credits_after
         
         return jsonify({
             'success': True,
-            'session_id': session_id,          # ← CRÍTICO: Frontend debe guardar esto
+            'session_id': session_id,
             'project_id': project_id,
-            'is_new_chat': is_new_chat,
             'message_id': str(uuid.uuid4()),
             'credits_before': user_credits_before,
             'credits_used': credits_actually_used,
             'credits_remaining': user_credits_after,
+            'timestamp': datetime.now().isoformat(),
             **response
         })
         
@@ -1302,7 +1379,10 @@ def chat_with_bot(user):
         print(f"❌ Error in chat_with_bot: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': f'Could not process message: {str(e)}'}), 500
+        return jsonify({
+            'error': f'Could not process message: {str(e)}',
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 @app.route('/chat/history', methods=['GET'])
 @require_auth
