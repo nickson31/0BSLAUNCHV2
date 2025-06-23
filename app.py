@@ -1119,11 +1119,26 @@ def get_credits_balance(user):
 @require_auth
 def create_new_chat(user):
     """
-    VERSIÓN CORREGIDA - Arregla el INSERT que falta updated_at
+    Crea una nueva conversación asociada a un proyecto
+    VERSIÓN ROBUSTA - Maneja JSON malformado del frontend
     """
     try:
-        data = request.get_json() or {}
+        # MANEJO ROBUSTO DEL JSON
+        try:
+            data = request.get_json(force=True) or {}
+        except Exception as json_error:
+            print(f"⚠️ JSON parse error: {json_error}")
+            print(f"📝 Raw request data: {request.data}")
+            print(f"📋 Content-Type: {request.content_type}")
+            
+            # Si no hay JSON válido, usar valores por defecto
+            data = {}
+        
         project_id = data.get('project_id')
+        
+        print(f"🔍 Creating chat for user: {user['id']}")
+        print(f"📝 Project ID provided: {project_id}")
+        print(f"📊 Request data: {data}")
         
         # Si no hay project_id, buscar o crear uno
         if not project_id:
@@ -1149,7 +1164,7 @@ def create_new_chat(user):
                     project_id = str(uuid.uuid4())
                     print(f"📝 Creating default project: {project_id}")
                     
-                    # ✅ ESTE ES EL PROBLEMA - FALTA updated_at EN EL INSERT
+                    # ✅ INSERT CORREGIDO CON updated_at
                     conn.execute(
                         text("""
                             INSERT INTO projects (
@@ -1210,7 +1225,12 @@ def create_new_chat(user):
             'project_id': project_id,
             'message': 'New chat session created successfully',
             'user_id': user['id'],
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'debug_info': {
+                'received_data': data,
+                'content_type': request.content_type,
+                'has_json': bool(data)
+            }
         })
         
     except Exception as e:
@@ -1220,9 +1240,13 @@ def create_new_chat(user):
         return jsonify({
             'error': 'Could not create new chat session',
             'details': str(e),
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'debug_info': {
+                'raw_data': str(request.data),
+                'content_type': request.content_type,
+                'method': request.method
+            }
         }), 500
-
 
 @app.route('/chat/bot', methods=['POST'])
 @require_auth
