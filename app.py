@@ -445,25 +445,60 @@ def get_user_credits(user_id):
         return 0
 
 def charge_credits(user_id, amount):
-    """Cobra créditos al usuario"""
+    """Cobra créditos al usuario CON LOGS DETALLADOS"""
     try:
+        print(f"💸 Intentando cobrar {amount} créditos al usuario {user_id}")
+        
         with engine.connect() as conn:
+            # Primero verificar créditos actuales
+            current_result = conn.execute(
+                text("SELECT credits FROM users WHERE id = :user_id"),
+                {"user_id": user_id}
+            ).fetchone()
+            
+            if not current_result:
+                print(f"❌ Usuario {user_id} no encontrado")
+                return None
+            
+            current_credits = current_result[0]
+            print(f"💰 Créditos actuales: {current_credits}")
+            
+            if current_credits < amount:
+                print(f"❌ Créditos insuficientes: {current_credits} < {amount}")
+                return None
+            
+            # Hacer el cobro
             result = conn.execute(
                 text("""
                     UPDATE users 
-                    SET credits = credits - :amount 
-                    WHERE id = :user_id AND credits >= :amount
+                    SET credits = credits - :amount,
+                        updated_at = NOW()
+                    WHERE id = :user_id
                     RETURNING credits
                 """),
                 {"user_id": user_id, "amount": amount}
             ).fetchone()
             
             if result:
+                new_credits = result[0]
                 conn.commit()
-                return result[0]
-            return None
+                
+                print(f"✅ Cobro exitoso:")
+                print(f"   - Antes: {current_credits}")
+                print(f"   - Cobrado: {amount}")
+                print(f"   - Después: {new_credits}")
+                
+                # Log the transaction
+                log_credit_transaction(user_id, -amount, 'charge', 'Bot usage')
+                return new_credits
+            else:
+                print(f"❌ Error en UPDATE de créditos")
+                return None
+                
     except Exception as e:
-        print(f"Error charging credits: {e}")
+        print(f"❌ Error charging credits: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def add_credits(user_id, amount, reason='purchase'):
@@ -666,56 +701,76 @@ class BotManager:
         pass
     
     def process_user_request(self, user_input, user_context, user_id):
-        """Procesa request del usuario con Gemini"""
+        """Procesa request del usuario con tracking correcto de créditos"""
         try:
-            # Verificar créditos
+            # 1. VERIFICAR CRÉDITOS ACTUALES
+            credits_before = get_user_credits(user_id)
             required_credits = CREDIT_COSTS.get('basic_bot', 5)
-            current_credits = get_user_credits(user_id)
             
-            if current_credits < required_credits:
+            print(f"🤖 Bot procesando:")
+            print(f"   - Usuario: {user_id}")
+            print(f"   - Créditos antes: {credits_before}")
+            print(f"   - Créditos requeridos: {required_credits}")
+            
+            if credits_before < required_credits:
                 return {
                     'error': 'Insufficient credits',
                     'required': required_credits,
-                    'available': current_credits
+                    'available': credits_before
                 }
             
-            # Generar respuesta usando Gemini
+            # 2. GENERAR RESPUESTA CON GEMINI
             prompt = f"""
-            Eres un asistente de IA especializado en startups y emprendimiento.
+            Eres un asistente experto en startups y emprendimiento.
             
-            Entrada del usuario: {user_input}
-            Contexto: {user_context}
+            Usuario pregunta: {user_input}
             
-            Proporciona una respuesta útil, práctica y accionable.
+            Contexto del usuario:
+            - Plan: {user_context.get('user_plan', 'free')}
+            - Industria: {user_context.get('industry', 'No especificada')}
+            - Etapa: {user_context.get('stage', 'No especificada')}
+            
+            Responde de forma útil, práctica y accionable en español.
+            Máximo 300 palabras.
             """
             
             model = genai.GenerativeModel(MODEL_NAME)
-            response = model.generate_content(prompt)
+            ai_response = model.generate_content(prompt)
             
-            # Cobrar créditos
-            charge_credits(user_id, required_credits)
+            # 3. COBRAR CRÉDITOS
+            print(f"💳 Cobrando {required_credits} créditos...")
+            credits_after_charge = charge_credits(user_id, required_credits)
             
-            # Guardar interacción
+            if credits_after_charge is None:
+                return {'error': 'Could not charge credits'}
+            
+            print(f"✅ Créditos después del cobro: {credits_after_charge}")
+            
+            # 4. GUARDAR INTERACCIÓN
             save_neural_interaction(user_id, {
                 'bot': 'basic_bot',
                 'input': user_input,
-                'response': response.text,
+                'response': ai_response.text,
                 'credits_used': required_credits,
                 'context': user_context,
                 'session_id': user_context.get('session_id')
             })
             
+            # 5. RETORNAR RESPUESTA
             return {
                 'bot': 'basic_bot',
-                'response': response.text,
-                'credits_used': required_credits
+                'response': ai_response.text,
+                'credits_charged_by_bot': required_credits,
+                'processing_success': True
             }
             
         except Exception as e:
-            print(f"Error processing request: {e}")
-            return {'error': str(e)}
+            print(f"❌ Error in bot processing: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'error': f'Bot error: {str(e)}'}
 
-# Instanciar bot manager global
+# Actualizar la instancia global (ESTA LÍNEA YA EXISTE, NO LA CAMBIES)
 bot_manager = BotManager()
 
 # ==============================================================================
@@ -1077,53 +1132,98 @@ def create_new_chat(user):
 @app.route('/chat/bot', methods=['POST'])
 @require_auth
 def chat_with_bot(user):
-    """Procesa mensaje del usuario y retorna respuesta del bot"""
+    """
+    Procesa mensaje del usuario y retorna respuesta del bot
+    CON CRÉDITOS CORRECTOS EN TIEMPO REAL
+    
+    REQUEST BODY:
+    {
+        "message": "tu mensaje aquí",           // OBLIGATORIO
+        "session_id": "uuid-opcional",         // OPCIONAL
+        "context": {...}                       // OPCIONAL
+    }
+    """
     try:
         data = request.get_json()
-        if not data or 'message' not in data:
+        
+        # VALIDACIÓN BÁSICA
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+            
+        if not data.get('message'):
             return jsonify({'error': 'Message is required'}), 400
         
-        # Generate or use existing session_id
+        # GENERAR O USAR SESSION_ID EXISTENTE
         session_id = data.get('session_id')
         if not session_id:
-            session_id = str(uuid.uuid4())  # New chat
+            session_id = str(uuid.uuid4())
             is_new_chat = True
         else:
             is_new_chat = False
-            
-        # Verificar créditos
-        if not has_sufficient_credits(user['id'], CREDIT_COSTS['basic_bot']):
+        
+        # ✅ OBTENER CRÉDITOS ACTUALES EN TIEMPO REAL
+        user_credits_before = get_user_credits(user['id'])
+        print(f"💰 Créditos ANTES del chat: {user_credits_before}")
+        
+        # VERIFICAR CRÉDITOS SUFICIENTES
+        credits_required = CREDIT_COSTS.get('basic_bot', 5)
+        
+        if user_credits_before < credits_required:
             return jsonify({
                 'error': 'Insufficient credits',
-                'required': CREDIT_COSTS['basic_bot'],
-                'available': get_user_credits(user['id'])
-            }), 402
+                'required': credits_required,
+                'available': user_credits_before,
+                'upgrade_needed': True
+            }), 402  # Payment Required
             
-        # Procesar mensaje con bot_manager
+        # PREPARAR CONTEXTO MEJORADO
         enhanced_context = {
             'user_id': user['id'],
             'user_plan': user['subscription_plan'],
             'session_id': session_id,
             'is_new_chat': is_new_chat,
+            'user_credits_before': user_credits_before,
             **data.get('context', {})
         }
         
+        # PROCESAR CON BOT_MANAGER
         response = bot_manager.process_user_request(
             data['message'],
             enhanced_context,
             user['id']
         )
         
+        if 'error' in response:
+            return jsonify(response), 400
+        
+        # ✅ OBTENER CRÉDITOS ACTUALES DESPUÉS DEL PROCESAMIENTO
+        user_credits_after = get_user_credits(user['id'])
+        print(f"💰 Créditos DESPUÉS del chat: {user_credits_after}")
+        
+        # ✅ CALCULAR CRÉDITOS REALMENTE USADOS
+        credits_actually_used = user_credits_before - user_credits_after
+        print(f"💸 Créditos realmente usados: {credits_actually_used}")
+        
         return jsonify({
             'success': True,
             'session_id': session_id,
             'is_new_chat': is_new_chat,
+            'message_id': str(uuid.uuid4()),
+            
+            # ✅ INFORMACIÓN CORRECTA DE CRÉDITOS
+            'credits_before': user_credits_before,
+            'credits_used': credits_actually_used,
+            'credits_remaining': user_credits_after,  # ✅ ESTE ES EL CORRECTO
+            
+            # Respuesta del bot
             **response
         })
         
     except Exception as e:
         print(f"❌ Error in chat_with_bot: {e}")
-        return jsonify({'error': 'Could not process message'}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Could not process message: {str(e)}'}), 500
 
 @app.route('/chat/history', methods=['GET'])
 @require_auth
@@ -1493,6 +1593,164 @@ def handle_projects(user):
     except Exception as e:
         print(f"❌ Error in projects endpoint: {e}")
         return jsonify({'error': f'Database error: {str(e)}'}), 500
+
+# ==============================================================================
+#           NUEVOS ENDPOINTS QUE FALTAN
+# ==============================================================================
+
+# 1. ✅ ENDPOINT: /chat/recent - Obtener chats recientes
+@app.route('/chat/recent', methods=['GET'])
+@require_auth
+def get_recent_chats(user):
+    """
+    Obtiene los chats recientes del usuario
+    
+    QUERY PARAMETERS:
+    - limit: número de chats (default: 10, max: 50)
+    
+    REQUEST: GET /chat/recent?limit=20
+    """
+    try:
+        limit = min(int(request.args.get('limit', 10)), 50)  # Max 50 chats
+        
+        with engine.connect() as conn:
+            # Obtener conversaciones agrupadas por session_id
+            result = conn.execute(text("""
+                SELECT 
+                    COALESCE(session_id, id::text) as session_id,
+                    MIN(created_at) as started_at,
+                    MAX(created_at) as last_message_at,
+                    COUNT(*) as message_count,
+                    (array_agg(user_input ORDER BY created_at DESC))[1] as last_message_preview,
+                    (array_agg(bot_used ORDER BY created_at DESC))[1] as last_bot_used
+                FROM neural_interactions 
+                WHERE user_id = :user_id 
+                GROUP BY COALESCE(session_id, id::text)
+                ORDER BY MAX(created_at) DESC
+                LIMIT :limit
+            """), {"user_id": user['id'], "limit": limit}).fetchall()
+            
+            chats = []
+            for row in result:
+                chats.append({
+                    'session_id': row[0],
+                    'started_at': row[1].isoformat(),
+                    'last_message_at': row[2].isoformat(),
+                    'message_count': row[3],
+                    'last_message_preview': (row[4][:100] + '...') if len(row[4] or '') > 100 else (row[4] or ''),
+                    'last_bot_used': row[5] or 'unknown'
+                })
+        
+        return jsonify({
+            'success': True,
+            'chats': chats,
+            'total_count': len(chats)
+        })
+        
+    except Exception as e:
+        print(f"❌ Error getting recent chats: {e}")
+        return jsonify({'error': 'Could not get recent chats'}), 500
+
+# 2. ✅ ENDPOINT: /chat/messages/<session_id> - Obtener mensajes de un chat
+@app.route('/chat/messages/<session_id>', methods=['GET'])
+@require_auth
+def get_chat_messages(user, session_id):
+    """
+    Obtiene todos los mensajes de una sesión/conversación específica
+    
+    REQUEST: GET /chat/messages/uuid-de-sesion
+    """
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT id, bot_used, user_input, bot_output, credits_charged, 
+                       context_data, created_at
+                FROM neural_interactions
+                WHERE user_id = :user_id 
+                AND (session_id = :session_id OR id::text = :session_id)
+                ORDER BY created_at ASC
+            """), {
+                "user_id": user['id'],
+                "session_id": session_id
+            }).fetchall()
+            
+            if not result:
+                return jsonify({
+                    'success': True,
+                    'session_id': session_id,
+                    'messages': [],
+                    'total_messages': 0,
+                    'message': 'No messages found for this session'
+                })
+            
+            messages = []
+            for row in result:
+                try:
+                    context_data = json.loads(row[5]) if row[5] else {}
+                except:
+                    context_data = {}
+                
+                messages.append({
+                    'id': str(row[0]),
+                    'user_message': row[2],
+                    'bot_response': row[3],
+                    'bot_used': row[1],
+                    'credits_charged': row[4],
+                    'timestamp': row[6].isoformat(),
+                    'context': context_data
+                })
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'messages': messages,
+            'total_messages': len(messages)
+        })
+        
+    except Exception as e:
+        print(f"❌ Error getting chat messages: {e}")
+        return jsonify({'error': 'Could not get chat messages'}), 500
+
+# 3. ✅ ENDPOINT BONUS: /chat/delete/<session_id> - Eliminar conversación
+@app.route('/chat/delete/<session_id>', methods=['DELETE'])
+@require_auth
+def delete_chat_session(user, session_id):
+    """
+    Elimina una conversación completa
+    
+    REQUEST: DELETE /chat/delete/uuid-de-sesion
+    """
+    try:
+        with engine.connect() as conn:
+            # Contar mensajes a eliminar
+            count_result = conn.execute(text("""
+                SELECT COUNT(*) FROM neural_interactions
+                WHERE user_id = :user_id 
+                AND (session_id = :session_id OR id::text = :session_id)
+            """), {"user_id": user['id'], "session_id": session_id}).scalar()
+            
+            if count_result == 0:
+                return jsonify({'error': 'Chat session not found'}), 404
+            
+            # Eliminar mensajes
+            conn.execute(text("""
+                DELETE FROM neural_interactions
+                WHERE user_id = :user_id 
+                AND (session_id = :session_id OR id::text = :session_id)
+            """), {"user_id": user['id'], "session_id": session_id})
+            
+            conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Chat session deleted successfully',
+            'deleted_messages': count_result
+        })
+        
+    except Exception as e:
+        print(f"❌ Error deleting chat session: {e}")
+        return jsonify({'error': 'Could not delete chat session'}), 500
+        
 # ==============================================================================
 #           MAIN
 # ==============================================================================
