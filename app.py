@@ -819,6 +819,36 @@ def generate_chat_title_with_gemini(user_input, bot_response):
         print(f"❌ Error generating title: {e}")
         return "Nueva Conversación"
 
+def generate_simple_title_from_message(first_message, last_message):
+    """Genera título simple cuando no hay uno guardado - FALLBACK"""
+    try:
+        # Usar primeras palabras del primer mensaje o último
+        if first_message and len(first_message) > 10:
+            # Tomar primeras 5-7 palabras
+            words = first_message.split()[:6]
+            title = " ".join(words)
+            if len(first_message) > len(title):
+                title += "..."
+        elif last_message and len(last_message) > 10:
+            words = last_message.split()[:6]
+            title = " ".join(words)
+            if len(last_message) > len(title):
+                title += "..."
+        else:
+            title = "Nueva Conversación"
+        
+        # Limpiar caracteres especiales
+        title = title.replace('\n', ' ').replace('\r', ' ')
+        
+        # Limitar longitud
+        if len(title) > 50:
+            title = title[:47] + "..."
+            
+        return title
+    except Exception as e:
+        print(f"❌ Error generating simple title: {e}")
+        return "Nueva Conversación"
+
 def get_neural_memory(user_id):
     """Obtiene memoria neuronal del usuario"""
     try:
@@ -1245,6 +1275,21 @@ def get_enhanced_context_for_chat(user, session_id, project_id, data):
             'project_id': project_id,
             'user_language': 'en'  # Default language
         }
+
+def detect_user_language_simple_fallback(text):
+    """Detección simple de idioma como fallback"""
+    spanish_keywords = ['hola', 'como', 'que', 'para', 'por', 'con', 'esto', 'esta', 'quiero', 'necesito', 'puedo', 'ayuda']
+    english_keywords = ['hello', 'how', 'what', 'for', 'with', 'this', 'want', 'need', 'can', 'help', 'please']
+    
+    text_lower = text.lower()
+    
+    spanish_count = sum(1 for word in spanish_keywords if word in text_lower)
+    english_count = sum(1 for word in english_keywords if word in text_lower)
+    
+    if spanish_count > english_count:
+        return 'es'
+    else:
+        return 'en'
         
 # ==============================================================================
 #           BOT SYSTEM
@@ -1319,9 +1364,7 @@ class BotManager:
             traceback.print_exc()
             return {'error': f'Bot error: {str(e)}'}
 
-
-
-def _build_smart_prompt(self, user_input, user_context):
+    def _build_smart_prompt(self, user_input, user_context):
         """Construye prompt inteligente basado en contexto"""
         # Obtener información del contexto
         business_context = user_context.get('business_context', {})
@@ -1378,8 +1421,7 @@ def _build_smart_prompt(self, user_input, user_context):
         
         return prompt
 
-
- def _format_recent_conversations(self, conversations):
+    def _format_recent_conversations(self, conversations):
         """Formatea conversaciones recientes para contexto"""
         if not conversations:
             return "No previous conversations"
@@ -1871,7 +1913,7 @@ def create_new_chat(user):
 def chat_with_bot(user):
     """
     Procesa mensaje del usuario y retorna respuesta del bot
-    VERSIÓN MEJORADA - Compatible con la nueva estructura
+    VERSIÓN CORREGIDA Y COMPLETA
     """
     try:
         data = request.get_json()
@@ -1883,7 +1925,7 @@ def chat_with_bot(user):
         if not data.get('message'):
             return jsonify({'error': 'Message is required'}), 400
         
-        # PROJECT_ID Y SESSION_ID son requeridos ahora
+        # PROJECT_ID Y SESSION_ID son requeridos
         project_id = data.get('project_id')
         session_id = data.get('session_id')
         
@@ -1895,7 +1937,7 @@ def chat_with_bot(user):
         
         if not session_id:
             return jsonify({
-                'error': 'session_id is required',
+                'error': 'session_id is required', 
                 'suggestion': 'Use /chat/new to create a new chat session first'
             }), 400
         
@@ -1917,13 +1959,15 @@ def chat_with_bot(user):
                     'user_id': user['id']
                 }), 404
         
-        # EXTRAER CONTEXTO DEL PROYECTO
-        project_context = {
-            'project_id': project_id,
-            'project_name': project_result[1] if project_result[1] else 'Mi Proyecto',
-            'project_description': project_result[2] if project_result[2] else '',
-            'project_data': project_result[3] if isinstance(project_result[3], dict) else (json.loads(project_result[3]) if project_result[3] else {})
-        }
+        # OBTENER CONTEXTO MEJORADO
+        enhanced_context = get_enhanced_context_for_chat(user, session_id, project_id, data)
+        
+        # DETECTAR INTENCIÓN DE BÚSQUEDA DE INVERSORES
+        user_message = data.get('message', '')
+        wants_investor_search = detect_investor_search_intent(
+            user_message, 
+            enhanced_context.get('user_language', 'en')
+        )
         
         # VERIFICAR CRÉDITOS
         user_credits_before = get_user_credits(user['id'])
@@ -1936,90 +1980,59 @@ def chat_with_bot(user):
                 'available': user_credits_before,
                 'upgrade_needed': True
             }), 402
-            
-        # PREPARAR CONTEXTO COMPLETO
-
-@app.route('/chat/history', methods=['GET'])
-@require_auth
-def get_chat_history(user):
-    """Obtiene historial de conversaciones agrupadas por sesión"""
-    try:
-        with engine.connect() as conn:
-            # Obtener conversaciones agrupadas por session_id
-            result = conn.execute(text("""
-                SELECT 
-                    COALESCE(session_id, id::text) as conversation_id,
-                    MIN(created_at) as started_at,
-                    MAX(created_at) as last_message_at,
-                    COUNT(*) as message_count,
-                    MAX(user_input) as last_message,
-                    MAX(bot_used) as last_bot
-                FROM neural_interactions 
-                WHERE user_id = :user_id 
-                GROUP BY COALESCE(session_id, id::text)
-                ORDER BY MAX(created_at) DESC
-                LIMIT 20
-            """), {"user_id": user['id']}).fetchall()
-            
-            conversations = []
-            for row in result:
-                conversations.append({
-                    'conversation_id': row[0],
-                    'started_at': row[1].isoformat(),
-                    'last_message_at': row[2].isoformat(),
-                    'message_count': row[3],
-                    'last_message': row[4][:100] + '...' if len(row[4]) > 100 else row[4],
-                    'last_bot': row[5]
-                })
         
-        return jsonify({
+        # PROCESAR CON BOT MANAGER
+        response = bot_manager.process_user_request(
+            user_input=user_message,
+            user_context=enhanced_context,
+            user_id=user['id']
+        )
+        
+        # VERIFICAR RESPUESTA
+        if 'error' in response:
+            return jsonify(response), 400
+        
+        # ACTUALIZAR MEMORIA DEL PROYECTO
+        if project_id:
+            extract_and_update_project_memory(
+                user['id'], 
+                project_id,
+                user_message,
+                response.get('response', '')
+            )
+        
+        # PREPARAR RESPUESTA FINAL
+        final_response = {
             'success': True,
-            'conversations': conversations
-        })
+            'bot': response.get('bot', 'interactive_mentor'),
+            'response': response.get('response', ''),
+            'credits_charged': response.get('credits_charged_by_bot', credits_required),
+            'credits_remaining': get_user_credits(user['id']),
+            'session_id': session_id,
+            'project_id': project_id,
+            'detected_language': enhanced_context.get('user_language', 'en'),
+            'wants_investor_search': wants_investor_search,
+            'processing_success': response.get('processing_success', True)
+        }
+        
+        # Si quiere buscar inversores y no tiene el plan adecuado
+        if wants_investor_search and user.get('plan', 'free') == 'free':
+            final_response['upgrade_suggestion'] = {
+                'message': 'Upgrade to Growth plan to search investors',
+                'plan': 'growth',
+                'benefits': ['ML-powered investor search', '100k launch credits']
+            }
+        
+        return jsonify(final_response)
         
     except Exception as e:
-        print(f"Error getting chat history: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/chat/conversation/<conversation_id>', methods=['GET'])
-@require_auth
-def get_conversation_messages(user, conversation_id):
-    """Obtiene todos los mensajes de una conversación específica"""
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(text("""
-                SELECT id, bot_used, user_input, bot_output, credits_charged, 
-                       context_data, created_at
-                FROM neural_interactions
-                WHERE user_id = :user_id 
-                AND (session_id = :conversation_id OR id::text = :conversation_id)
-                ORDER BY created_at ASC
-            """), {
-                "user_id": user['id'],
-                "conversation_id": conversation_id
-            }).fetchall()
-            
-            messages = []
-            for row in result:
-                messages.append({
-                    'id': str(row[0]),
-                    'bot_used': row[1],
-                    'user_input': row[2],
-                    'bot_output': row[3],
-                    'credits_charged': row[4],
-                    'context_data': json.loads(row[5]) if row[5] else {},
-                    'created_at': row[6].isoformat()
-                })
-        
+        print(f"❌ Error in chat endpoint: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
-            'success': True,
-            'conversation_id': conversation_id,
-            'messages': messages
-        })
-        
-    except Exception as e:
-        print(f"Error getting conversation: {e}")
-        return jsonify({'error': str(e)}), 500
+            'error': 'Could not process chat',
+            'details': str(e)
+        }), 500
 
 @app.route('/chat/stats', methods=['GET'])
 @require_auth
