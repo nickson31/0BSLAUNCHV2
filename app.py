@@ -1472,7 +1472,7 @@ def handle_projects(user):
                         "id": project_id,
                         "user_id": user['id'],
                         "kpi_data": json.dumps(project_data),  # ← ARREGLO: json.dumps()
-                        "status": "active"
+                        "status": "ONBOARDING"
                     }
                 )
                 conn.commit()
@@ -1486,7 +1486,7 @@ def handle_projects(user):
                     'id': project_id,
                     'user_id': user['id'],
                     'kpi_data': project_data,
-                    'status': 'active'
+                    'status': 'ONBOARDING'
                 }
             })
             
