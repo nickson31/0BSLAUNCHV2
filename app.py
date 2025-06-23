@@ -1414,7 +1414,7 @@ def handle_projects(user):
             with engine.connect() as conn:
                 result = conn.execute(
                     text("""
-                        SELECT id, user_id, kpi_data, status, created_at
+                        SELECT id, user_id, project_name, kpi_data, status, created_at
                         FROM projects 
                         WHERE user_id = :user_id
                         ORDER BY created_at DESC
@@ -1463,9 +1463,9 @@ def handle_projects(user):
                 conn.execute(
                     text("""
                         INSERT INTO projects (
-                            id, user_id, kpi_data, status, created_at
+                            id, user_id, project_name, kpi_data, status, created_at
                         ) VALUES (
-                            :id, :user_id, :kpi_data, :status, NOW()
+                            :id, :user_id, :project_name, :kpi_data, :status, NOW()
                         )
                     """),
                     {
