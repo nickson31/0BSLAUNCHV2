@@ -645,7 +645,7 @@ def init_neural_memory(user_id):
         print(f"❌ Error initializing neural memory: {e}")
 
 def save_neural_interaction(user_id, interaction_data):
-    """Guarda interacción en memoria neuronal CON PROJECT_ID"""
+    """Guarda interacción en memoria neuronal CON TODAS LAS COLUMNAS"""
     try:
         with engine.connect() as conn:
             conn.execute(
@@ -671,7 +671,7 @@ def save_neural_interaction(user_id, interaction_data):
                 }
             )
             conn.commit()
-            print(f"✅ Interaction saved with project_id: {interaction_data.get('project_id')}")
+            print(f"✅ Interaction saved with session_id: {interaction_data.get('session_id')}")
     except Exception as e:
         print(f"❌ Error saving interaction: {e}")
 
@@ -1171,7 +1171,7 @@ def create_new_chat(user):
 def chat_with_bot(user):
     """
     Procesa mensaje del usuario y retorna respuesta del bot
-    CON PROJECTS
+    CON PROJECT_ID Y SESSION_ID OBLIGATORIOS
     """
     try:
         data = request.get_json()
@@ -1185,6 +1185,14 @@ def chat_with_bot(user):
             
         if not data.get('project_id'):
             return jsonify({'error': 'project_id is required'}), 400
+        
+        # SESSION_ID: Si no existe, crear uno nuevo
+        session_id = data.get('session_id')
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            is_new_chat = True
+        else:
+            is_new_chat = False
         
         project_id = data['project_id']
         
@@ -1205,24 +1213,13 @@ def chat_with_bot(user):
         # EXTRAER CONTEXTO DEL PROYECTO
         project_context = {
             'project_id': project_id,
-            'project_name': project_result[1],
-            'project_description': project_result[2],
+            'project_name': project_result[1] if project_result[1] else 'Mi Proyecto',
+            'project_description': project_result[2] if project_result[2] else '',
             'project_data': json.loads(project_result[3]) if project_result[3] else {}
         }
         
-        # GENERAR O USAR SESSION_ID EXISTENTE
-        session_id = data.get('session_id')
-        if not session_id:
-            session_id = str(uuid.uuid4())
-            is_new_chat = True
-        else:
-            is_new_chat = False
-        
-        # ✅ OBTENER CRÉDITOS ACTUALES EN TIEMPO REAL
+        # OBTENER CRÉDITOS ACTUALES
         user_credits_before = get_user_credits(user['id'])
-        print(f"💰 Créditos ANTES del chat: {user_credits_before}")
-        
-        # VERIFICAR CRÉDITOS SUFICIENTES
         credits_required = CREDIT_COSTS.get('basic_bot', 5)
         
         if user_credits_before < credits_required:
@@ -1233,7 +1230,7 @@ def chat_with_bot(user):
                 'upgrade_needed': True
             }), 402
             
-        # PREPARAR CONTEXTO MEJORADO CON PROYECTO
+        # PREPARAR CONTEXTO MEJORADO
         enhanced_context = {
             'user_id': user['id'],
             'user_plan': user['subscription_plan'],
@@ -1255,17 +1252,43 @@ def chat_with_bot(user):
         if 'error' in response:
             return jsonify(response), 400
         
-        # ✅ OBTENER CRÉDITOS ACTUALES DESPUÉS DEL PROCESAMIENTO
-        user_credits_after = get_user_credits(user['id'])
-        print(f"💰 Créditos DESPUÉS del chat: {user_credits_after}")
+        # GUARDAR INTERACCIÓN CON TODAS LAS COLUMNAS
+        try:
+            with engine.connect() as conn:
+                conn.execute(
+                    text("""
+                        INSERT INTO neural_interactions (
+                            id, user_id, bot_used, user_input, bot_output, 
+                            credits_charged, context_data, session_id, project_id, created_at
+                        ) VALUES (
+                            :id, :user_id, :bot_used, :user_input, :bot_output,
+                            :credits_charged, :context_data, :session_id, :project_id, NOW()
+                        )
+                    """),
+                    {
+                        "id": str(uuid.uuid4()),
+                        "user_id": user['id'],
+                        "bot_used": response.get('bot', 'basic_bot'),
+                        "user_input": data['message'],
+                        "bot_output": response.get('response', ''),
+                        "credits_charged": response.get('credits_charged_by_bot', credits_required),
+                        "context_data": json.dumps(enhanced_context),
+                        "session_id": session_id,
+                        "project_id": project_id
+                    }
+                )
+                conn.commit()
+                print(f"✅ Interaction saved: session={session_id}, project={project_id}")
+        except Exception as e:
+            print(f"⚠️ Warning: Could not save interaction: {e}")
         
-        # ✅ CALCULAR CRÉDITOS REALMENTE USADOS
+        # CALCULAR CRÉDITOS USADOS
+        user_credits_after = get_user_credits(user['id'])
         credits_actually_used = user_credits_before - user_credits_after
-        print(f"💸 Créditos realmente usados: {credits_actually_used}")
         
         return jsonify({
             'success': True,
-            'session_id': session_id,
+            'session_id': session_id,          # ← CRÍTICO: Frontend debe guardar esto
             'project_id': project_id,
             'is_new_chat': is_new_chat,
             'message_id': str(uuid.uuid4()),
