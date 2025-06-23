@@ -1266,42 +1266,6 @@ def get_chat_stats(user):
 #           PROJECT CONTEXT ENDPOINTS
 # ==============================================================================
 
-@app.route('/projects', methods=['GET'])
-@require_auth
-def get_user_projects(user):
-    """Get user's project context and analysis"""
-    try:
-        # Mock data for now - this would integrate with your neural memory system
-        projects_data = {
-            'current_project': {
-                'name': 'My Startup',
-                'stage': 'ideation',
-                'industry': 'technology',
-                'last_activity': datetime.now().isoformat()
-            },
-            'progress': {
-                'documents_created': 0,
-                'conversations': 0,
-                'phase': 'getting_started'
-            },
-            'next_steps': [
-                {
-                    'title': 'Create your first pitch deck',
-                    'description': 'Start with a compelling presentation for investors',
-                    'priority': 'high'
-                }
-            ]
-        }
-        
-        return jsonify({
-            'success': True,
-            'projects': projects_data
-        })
-        
-    except Exception as e:
-        print(f"Error getting projects: {e}")
-        return jsonify({'error': str(e)}), 500
-
 @app.route('/bots/available', methods=['GET'])
 @require_auth
 def get_available_bots(user):
@@ -1438,97 +1402,99 @@ def method_not_allowed(error):
 def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/projects', methods=['POST'])
+# ENDPOINT /projects ARREGLADO PARA TU ESQUEMA EXACTO
+
+@app.route('/projects', methods=['GET', 'POST'])
 @require_auth
-def create_project(user):
-    """Crea un nuevo proyecto para el usuario"""
+def handle_projects(user):
+    """Handle projects endpoint - ARREGLADO"""
     try:
-        data = request.get_json()
-        
-        # Validar datos requeridos
-        if not data:
-            return jsonify({'error': 'No data provided'}), 400
-        
-        required_fields = ['name']
-        for field in required_fields:
-            if field not in data or not data[field]:
-                return jsonify({'error': f'Missing required field: {field}'}), 400
-        
-        # Datos del proyecto
-        project_name = data['name'].strip()
-        description = data.get('description', '').strip()
-        industry = data.get('industry', '').strip()
-        stage = data.get('stage', 'ideation').strip()
-        location = data.get('location', '').strip()
-        
-        # Generar ID único para el proyecto
-        project_id = str(uuid.uuid4())
-        
-        # Guardar en memoria neuronal del usuario
-        try:
+        if request.method == 'GET':
+            # GET projects from database
             with engine.connect() as conn:
-                # Obtener memoria neuronal actual
                 result = conn.execute(
-                    text("SELECT memory_data FROM neural_memory WHERE user_id = :user_id"),
+                    text("""
+                        SELECT id, user_id, kpi_data, status, created_at
+                        FROM projects 
+                        WHERE user_id = :user_id
+                        ORDER BY created_at DESC
+                    """),
                     {"user_id": user['id']}
-                ).fetchone()
+                ).fetchall()
                 
-                if result and result[0]:
-                    memory_data = json.loads(result[0])
-                else:
-                    memory_data = {}
-                
-                # Añadir proyecto a la memoria
-                if 'projects' not in memory_data:
-                    memory_data['projects'] = []
-                
-                # Crear objeto proyecto
-                project = {
-                    'id': project_id,
-                    'name': project_name,
-                    'description': description,
-                    'industry': industry,
-                    'stage': stage,
-                    'location': location,
-                    'created_at': datetime.now().isoformat(),
-                    'updated_at': datetime.now().isoformat(),
-                    'is_active': True
-                }
-                
-                # Añadir proyecto
-                memory_data['projects'].append(project)
-                
-                # Actualizar memoria neuronal
+                projects = []
+                for row in result:
+                    projects.append({
+                        'id': str(row[0]),
+                        'user_id': str(row[1]),
+                        'kpi_data': json.loads(row[2]) if row[2] else {},
+                        'status': row[3],
+                        'created_at': row[4].isoformat()
+                    })
+            
+            return jsonify({
+                'success': True,
+                'projects': projects,
+                'count': len(projects)
+            })
+        
+        elif request.method == 'POST':
+            data = request.get_json()
+            
+            if not data:
+                return jsonify({'error': 'No data provided'}), 400
+            
+            # Generar ID del proyecto
+            project_id = str(uuid.uuid4())
+            
+            # Preparar datos del proyecto
+            project_data = {
+                'name': data.get('name', ''),
+                'description': data.get('description', ''),
+                'industry': data.get('industry', ''),
+                'stage': data.get('stage', ''),
+                'location': data.get('location', ''),
+                'website': data.get('website', ''),
+                'created_by': user['email']
+            }
+            
+            # Insertar en base de datos
+            with engine.connect() as conn:
                 conn.execute(
                     text("""
-                        UPDATE neural_memory 
-                        SET memory_data = :memory_data, updated_at = NOW()
-                        WHERE user_id = :user_id
+                        INSERT INTO projects (
+                            id, user_id, kpi_data, status, created_at
+                        ) VALUES (
+                            :id, :user_id, :kpi_data, :status, NOW()
+                        )
                     """),
                     {
-                        "memory_data": json.dumps(memory_data),
-                        "user_id": user['id']
+                        "id": project_id,
+                        "user_id": user['id'],
+                        "kpi_data": json.dumps(project_data),  # ← ARREGLO: json.dumps()
+                        "status": "active"
                     }
                 )
                 conn.commit()
-                
-                print(f"✅ Project created successfully: {project_id} for user {user['id']}")
-                
-                return jsonify({
-                    'success': True,
-                    'message': 'Project created successfully',
-                    'project': project
-                }), 201
-                
-        except Exception as db_error:
-            print(f"❌ Database error creating project: {db_error}")
-            return jsonify({'error': 'Database error'}), 500
+                print(f"✅ Project created successfully: {project_id}")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Project created successfully',
+                'project_id': project_id,
+                'project': {
+                    'id': project_id,
+                    'user_id': user['id'],
+                    'kpi_data': project_data,
+                    'status': 'active'
+                }
+            })
             
     except Exception as e:
-        print(f"❌ Error creating project: {e}")
+        print(f"❌ Error in projects endpoint: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': f'Internal server error: {str(e)}'}), 500
+        return jsonify({'error': f'Database error: {str(e)}'}), 500
 # ==============================================================================
 #           MAIN
 # ==============================================================================
