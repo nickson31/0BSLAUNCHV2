@@ -1694,7 +1694,7 @@ def handle_projects(user):
                 projects = []
                 for row in result:
                     try:
-                        kpi_data = json.loads(row[4]) if row[4] else {}  # row[4] es kpi_data AHORA
+                        kpi_data = json.loads(row[4]) if row[4] else {}
                     except:
                         kpi_data = {}
                     
@@ -1704,8 +1704,8 @@ def handle_projects(user):
                         'project_name': row[2],
                         'project_description': row[3],
                         'kpi_data': kpi_data,
-                        'status': row[5],  # row[5] es status
-                        'created_at': row[6].isoformat() if row[6] else None  # row[6] es created_at
+                        'status': row[5],
+                        'created_at': row[6].isoformat() if row[6] else None
                     })
             
             return jsonify({
@@ -1734,12 +1734,13 @@ def handle_projects(user):
             }
             
             with engine.connect() as conn:
+                # ✅ INSERT CORREGIDO - Incluye updated_at
                 conn.execute(
                     text("""
                         INSERT INTO projects (
-                            id, user_id, project_name, project_description, kpi_data, status, created_at
+                            id, user_id, project_name, project_description, kpi_data, status, created_at, updated_at
                         ) VALUES (
-                            :id, :user_id, :project_name, :project_description, :kpi_data, :status, NOW()
+                            :id, :user_id, :project_name, :project_description, :kpi_data, :status, NOW(), NOW()
                         )
                     """),
                     {
@@ -1763,6 +1764,7 @@ def handle_projects(user):
     except Exception as e:
         print(f"❌ Error in projects endpoint: {e}")
         return jsonify({'error': f'Database error: {str(e)}'}), 500
+
 
 # ==============================================================================
 #           NUEVOS ENDPOINTS QUE FALTAN
@@ -1901,27 +1903,25 @@ LEFT JOIN projects p ON ni.project_id = p.id
 @require_auth
 def delete_chat_session(user, session_id):
     """
-    Elimina una conversación completa
-    
-    REQUEST: DELETE /chat/delete/uuid-de-sesion
+    Elimina una conversación completa - SQL CORREGIDO
     """
     try:
         with engine.connect() as conn:
-            # Contar mensajes a eliminar
+            # ✅ QUERY CORREGIDO - Sin referencia a tabla 'ni'
             count_result = conn.execute(text("""
                 SELECT COUNT(*) FROM neural_interactions
                 WHERE user_id = :user_id 
-                AND (ni.session_id::text = :session_id OR ni.id::text = :session_id)
+                AND (session_id::text = :session_id OR id::text = :session_id)
             """), {"user_id": user['id'], "session_id": session_id}).scalar()
             
             if count_result == 0:
                 return jsonify({'error': 'Chat session not found'}), 404
             
-            # Eliminar mensajes
+            # ✅ DELETE CORREGIDO - Sin referencia a tabla 'ni'
             conn.execute(text("""
                 DELETE FROM neural_interactions
                 WHERE user_id = :user_id 
-                AND (ni.session_id::text = :session_id OR ni.id::text = :session_id)
+                AND (session_id::text = :session_id OR id::text = :session_id)
             """), {"user_id": user['id'], "session_id": session_id})
             
             conn.commit()
