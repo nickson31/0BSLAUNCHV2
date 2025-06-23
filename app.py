@@ -32,6 +32,11 @@ from functools import wraps
 import hashlib
 import bcrypt
 import requests
+import tempfile
+from werkzeug.utils import secure_filename
+from werkzeug.datastructures import FileStorage
+import PyPDF2
+import docx
 
 # Google Auth
 from google.oauth2 import id_token
@@ -645,8 +650,10 @@ def init_neural_memory(user_id):
         print(f"❌ Error initializing neural memory: {e}")
 
 def save_neural_interaction(user_id, interaction_data):
-    """Guarda interacción en memoria neuronal CON TODAS LAS COLUMNAS"""
+    """Guarda interacción en memoria neuronal CON TÍTULO GENERADO POR GEMINI"""
     try:
+        interaction_id = str(uuid.uuid4())
+        
         with engine.connect() as conn:
             conn.execute(
                 text("""
@@ -659,7 +666,7 @@ def save_neural_interaction(user_id, interaction_data):
                     )
                 """),
                 {
-                    "id": str(uuid.uuid4()),
+                    "id": interaction_id,
                     "user_id": user_id,
                     "bot_used": interaction_data.get('bot', 'unknown'),
                     "user_input": interaction_data.get('input', ''),
@@ -671,9 +678,100 @@ def save_neural_interaction(user_id, interaction_data):
                 }
             )
             conn.commit()
-            print(f"✅ Interaction saved with session_id: {interaction_data.get('session_id')}")
+            
+            # Si es la primera interacción de la sesión, generar título
+            session_id = interaction_data.get('session_id')
+            if session_id:
+                check_and_generate_session_title(session_id, user_id, interaction_data)
+            
+            print(f"✅ Interaction saved: {interaction_id}")
+    
     except Exception as e:
         print(f"❌ Error saving interaction: {e}")
+
+def check_and_generate_session_title(session_id, user_id, interaction_data):
+    """Genera título para la sesión si es la primera interacción"""
+    try:
+        with engine.connect() as conn:
+            # Verificar si ya existe título para esta sesión
+            existing_title = conn.execute(
+                text("""
+                    SELECT session_title FROM neural_interactions 
+                    WHERE session_id = :session_id AND user_id = :user_id 
+                    AND session_title IS NOT NULL
+                    LIMIT 1
+                """),
+                {"session_id": session_id, "user_id": user_id}
+            ).fetchone()
+            
+            if existing_title:
+                return  # Ya tiene título
+            
+            # Generar título con Gemini
+            user_input = interaction_data.get('input', '')
+            bot_response = interaction_data.get('response', '')
+            
+            title = generate_chat_title_with_gemini(user_input, bot_response)
+            
+            # Actualizar la interacción con el título
+            conn.execute(
+                text("""
+                    UPDATE neural_interactions 
+                    SET session_title = :title 
+                    WHERE session_id = :session_id AND user_id = :user_id
+                """),
+                {"title": title, "session_id": session_id, "user_id": user_id}
+            )
+            conn.commit()
+            
+            print(f"✅ Session title generated: {title}")
+            
+    except Exception as e:
+        print(f"❌ Error generating session title: {e}")
+
+def generate_chat_title_with_gemini(user_input, bot_response):
+    """Genera título inteligente usando Gemini"""
+    try:
+        title_prompt = f"""
+        Genera un título corto y descriptivo (máximo 5 palabras) para esta conversación.
+        El título debe capturar la esencia de lo que el usuario está preguntando o trabajando.
+        
+        Usuario preguntó: {user_input[:200]}
+        Asistente respondió sobre: {bot_response[:200]}
+        
+        Ejemplos de buenos títulos:
+        - "Pitch Deck para FinTech"
+        - "Buscar Inversores Seed"
+        - "Marketing Plan SaaS"
+        - "Análisis Competencia EdTech"
+        - "Modelo Financiero B2B"
+        
+        Responde SOLO con el título, sin comillas ni explicaciones:
+        """
+        
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(
+            title_prompt,
+            generation_config={
+                "temperature": 0.3,
+                "max_output_tokens": 20,
+            }
+        )
+        
+        title = response.text.strip()
+        
+        # Limpiar el título
+        title = title.replace('"', '').replace("'", '').strip()
+        
+        # Validar longitud
+        if len(title) > 50:
+            title = title[:47] + "..."
+        
+        return title if title else "Nueva Conversación"
+        
+    except Exception as e:
+        print(f"❌ Error generating title: {e}")
+        return "Nueva Conversación"
 
 def get_neural_memory(user_id):
     """Obtiene memoria neuronal del usuario"""
@@ -694,6 +792,271 @@ def get_neural_memory(user_id):
         print(f"Error getting neural memory: {e}")
         return {}
 
+def extract_and_update_project_memory(user_id, project_id, user_input, bot_response):
+    """
+    Extrae información clave del chat y actualiza la memoria del proyecto
+    """
+    try:
+        # Obtener memoria actual del proyecto
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT kpi_data FROM projects 
+                    WHERE id = :project_id AND user_id = :user_id
+                """),
+                {"project_id": project_id, "user_id": user_id}
+            ).fetchone()
+            
+            if not result:
+                return False
+            
+            current_memory = json.loads(result[0]) if result[0] else {}
+        
+        # Extraer información del input del usuario
+        extracted_info = extract_business_info(user_input + " " + bot_response)
+        
+        # Actualizar memoria con nueva información
+        updated_memory = merge_memory_data(current_memory, extracted_info)
+        
+        # Guardar memoria actualizada
+        with engine.connect() as conn:
+            conn.execute(
+                text("""
+                    UPDATE projects 
+                    SET kpi_data = :memory_data, updated_at = NOW()
+                    WHERE id = :project_id AND user_id = :user_id
+                """),
+                {
+                    "memory_data": json.dumps(updated_memory),
+                    "project_id": project_id,
+                    "user_id": user_id
+                }
+            )
+            conn.commit()
+        
+        print(f"✅ Project memory updated for project {project_id}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error updating project memory: {e}")
+        return False
+
+def extract_business_info(text):
+    """
+    Extrae información de negocio del texto usando Gemini
+    """
+    try:
+        extraction_prompt = f"""
+        Analiza el siguiente texto y extrae SOLO la información de negocio específica que mencione el usuario.
+        NO inventes información que no esté explícitamente mencionada.
+        
+        Texto: {text}
+        
+        Devuelve SOLO un JSON con esta estructura (solo incluye campos que tengan información real):
+        {{
+            "startup_name": "nombre si se menciona",
+            "industry": "industria específica si se menciona", 
+            "stage": "etapa si se menciona (idea, mvp, seed, series_a, etc)",
+            "business_model": "modelo de negocio si se describe",
+            "target_market": "mercado objetivo si se especifica",
+            "problem_solving": "problema que resuelve si se explica",
+            "revenue_model": "como genera dinero si se menciona",
+            "team_size": "tamaño del equipo si se menciona",
+            "location": "ubicación si se especifica",
+            "funding_raised": "dinero levantado si se menciona",
+            "funding_needed": "dinero que necesita si se menciona",
+            "competitors": ["competidores si se mencionan"],
+            "key_metrics": "métricas clave si se mencionan",
+            "current_challenges": ["retos actuales si se mencionan"],
+            "business_type": "real_startup, side_project, o idea_stage"
+        }}
+        
+        Si no hay información específica, devuelve {{}}.
+        """
+        
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(
+            extraction_prompt,
+            generation_config={
+                "temperature": 0.1,
+                "max_output_tokens": 1000,
+            }
+        )
+        
+        # Extraer JSON de la respuesta
+        response_text = response.text.strip()
+        if response_text.startswith('```json'):
+            response_text = response_text[7:-3]
+        elif response_text.startswith('```'):
+            response_text = response_text[3:-3]
+        
+        try:
+            extracted_data = json.loads(response_text)
+            return extracted_data
+        except json.JSONDecodeError:
+            print(f"⚠️ Could not parse JSON from Gemini: {response_text}")
+            return {}
+        
+    except Exception as e:
+        print(f"❌ Error extracting business info: {e}")
+        return {}
+
+def merge_memory_data(current_memory, new_info):
+    """
+    Combina memoria actual con nueva información inteligentemente
+    """
+    try:
+        # Inicializar estructura si no existe
+        if not current_memory:
+            current_memory = {
+                "business_context": {},
+                "chat_history_summary": [],
+                "investor_preferences": {},
+                "document_history": [],
+                "last_updated": datetime.now().isoformat()
+            }
+        
+        # Actualizar contexto de negocio
+        business_context = current_memory.get("business_context", {})
+        
+        for key, value in new_info.items():
+            if value and value != "":  # Solo actualizar si hay valor real
+                if key == "competitors" and isinstance(value, list):
+                    # Combinar listas de competidores
+                    existing = business_context.get(key, [])
+                    business_context[key] = list(set(existing + value))
+                elif key == "current_challenges" and isinstance(value, list):
+                    # Combinar listas de retos
+                    existing = business_context.get(key, [])
+                    business_context[key] = list(set(existing + value))
+                else:
+                    # Actualizar valor simple
+                    business_context[key] = value
+        
+        current_memory["business_context"] = business_context
+        current_memory["last_updated"] = datetime.now().isoformat()
+        
+        return current_memory
+        
+    except Exception as e:
+        print(f"❌ Error merging memory data: {e}")
+        return current_memory or {}
+
+def get_project_context_for_chat(user_id, project_id):
+    """
+    Obtiene el contexto completo del proyecto para el chat
+    """
+    try:
+        with engine.connect() as conn:
+            # Obtener información del proyecto
+            project_result = conn.execute(
+                text("""
+                    SELECT project_name, project_description, kpi_data, status, created_at
+                    FROM projects 
+                    WHERE id = :project_id AND user_id = :user_id
+                """),
+                {"project_id": project_id, "user_id": user_id}
+            ).fetchone()
+            
+            if not project_result:
+                return {}
+            
+            # Obtener últimas interacciones del proyecto
+            recent_chats = conn.execute(
+                text("""
+                    SELECT user_input, bot_output, created_at 
+                    FROM neural_interactions 
+                    WHERE user_id = :user_id AND project_id = :project_id 
+                    ORDER BY created_at DESC 
+                    LIMIT 10
+                """),
+                {"user_id": user_id, "project_id": project_id}
+            ).fetchall()
+            
+            # Obtener documentos del proyecto
+            project_docs = conn.execute(
+                text("""
+                    SELECT document_type, title, created_at 
+                    FROM generated_documents 
+                    WHERE user_id = :user_id 
+                    AND JSON_EXTRACT(metadata, '$.project_id') = :project_id
+                    ORDER BY created_at DESC
+                """),
+                {"user_id": user_id, "project_id": project_id}
+            ).fetchall()
+        
+        # Procesar memoria del proyecto
+        project_memory = json.loads(project_result[2]) if project_result[2] else {}
+        business_context = project_memory.get("business_context", {})
+        
+        # Crear resumen de chats recientes
+        recent_context = []
+        for chat in recent_chats[:5]:  # Últimos 5 chats
+            recent_context.append({
+                "user_said": chat[0][:100] + "..." if len(chat[0]) > 100 else chat[0],
+                "assistant_responded": chat[1][:100] + "..." if len(chat[1]) > 100 else chat[1],
+                "when": chat[2].strftime("%Y-%m-%d")
+            })
+        
+        # Crear lista de documentos
+        documents_created = [
+            {
+                "type": doc[0],
+                "title": doc[1],
+                "created": doc[2].strftime("%Y-%m-%d")
+            }
+            for doc in project_docs
+        ]
+        
+        return {
+            "project_name": project_result[0],
+            "project_description": project_result[1],
+            "project_status": project_result[3],
+            "project_age_days": (datetime.now() - project_result[4]).days,
+            "business_context": business_context,
+            "recent_conversation_context": recent_context,
+            "documents_created": documents_created,
+            "total_interactions": len(recent_chats),
+            "context_summary": generate_context_summary(business_context, recent_context)
+        }
+        
+    except Exception as e:
+        print(f"❌ Error getting project context: {e}")
+        return {}
+
+def generate_context_summary(business_context, recent_chats):
+    """
+    Genera un resumen del contexto para incluir en prompts
+    """
+    try:
+        summary_parts = []
+        
+        # Información del negocio
+        if business_context.get("startup_name"):
+            summary_parts.append(f"Startup: {business_context['startup_name']}")
+        
+        if business_context.get("industry"):
+            summary_parts.append(f"Industria: {business_context['industry']}")
+        
+        if business_context.get("stage"):
+            summary_parts.append(f"Etapa: {business_context['stage']}")
+        
+        if business_context.get("business_type"):
+            summary_parts.append(f"Tipo: {business_context['business_type']}")
+        
+        if business_context.get("problem_solving"):
+            summary_parts.append(f"Problema que resuelve: {business_context['problem_solving']}")
+        
+        # Contexto reciente
+        if recent_chats:
+            summary_parts.append(f"Últimas conversaciones: {len(recent_chats)} interacciones recientes")
+        
+        return " | ".join(summary_parts) if summary_parts else "Nuevo proyecto sin contexto previo"
+        
+    except Exception as e:
+        print(f"❌ Error generating context summary: {e}")
+        return "Error generando resumen de contexto"
+        
 # ==============================================================================
 #           BOT SYSTEM
 # ==============================================================================
@@ -1321,15 +1684,24 @@ def chat_with_bot(user):
             }), 402
             
         # PREPARAR CONTEXTO COMPLETO
-        enhanced_context = {
-            'user_id': user['id'],
-            'user_plan': user['subscription_plan'],
-            'session_id': session_id,
-            'project_id': project_id,
-            'user_credits_before': user_credits_before,
-            **project_context,
-            **data.get('context', {})
-        }
+    def get_enhanced_context_for_chat(user, session_id, project_id, data):
+    """Obtiene contexto mejorado para el chat"""
+    
+    # Obtener contexto del proyecto
+    project_context = get_project_context_for_chat(user['id'], project_id)
+    
+    # Contexto base
+    enhanced_context = {
+        'user_id': user['id'],
+        'user_plan': user['subscription_plan'],
+        'session_id': session_id,
+        'project_id': project_id,
+        'user_credits_before': get_user_credits(user['id']),
+        **data.get('context', {}),
+        **project_context
+    }
+    
+    return enhanced_context
         
         # PROCESAR CON BOT_MANAGER
         response = bot_manager.process_user_request(
@@ -1774,15 +2146,12 @@ def handle_projects(user):
 # 1. ✅ ENDPOINT: /chat/recent - Obtener chats recientes
 @app.route('/chat/recent', methods=['GET'])
 @require_auth
-def get_recent_chats(user):
-    """
-    Obtiene chats recientes del usuario, opcionalmente filtrados por proyecto
-    """
+def get_recent_chats_with_titles(user):
+    """Obtiene chats recientes con títulos generados por Gemini"""
     try:
-        limit = min(int(request.args.get('limit', 10)), 50)
+        limit = min(int(request.args.get('limit', 20)), 50)
         project_id = request.args.get('project_id')
         
-        # CONSTRUIR QUERY DINÁMICAMENTE
         base_query = """
             SELECT 
                 COALESCE(ni.session_id::text, ni.id::text) as session_id,
@@ -1791,8 +2160,10 @@ def get_recent_chats(user):
                 MIN(ni.created_at) as started_at,
                 MAX(ni.created_at) as last_message_at,
                 COUNT(*) as message_count,
+                (array_agg(ni.user_input ORDER BY ni.created_at ASC))[1] as first_message,
                 (array_agg(ni.user_input ORDER BY ni.created_at DESC))[1] as last_message_preview,
-                (array_agg(ni.bot_used ORDER BY ni.created_at DESC))[1] as last_bot_used
+                (array_agg(ni.bot_used ORDER BY ni.created_at DESC))[1] as last_bot_used,
+                MAX(ni.session_title) as session_title
             FROM neural_interactions ni
             LEFT JOIN projects p ON ni.project_id = p.id
             WHERE ni.user_id = :user_id
@@ -1800,7 +2171,6 @@ def get_recent_chats(user):
         
         params = {"user_id": user['id'], "limit": limit}
         
-        # FILTRAR POR PROYECTO SI SE ESPECIFICA
         if project_id:
             base_query += " AND ni.project_id = :project_id"
             params["project_id"] = project_id
@@ -1816,15 +2186,19 @@ def get_recent_chats(user):
             
             chats = []
             for row in result:
+                # Si no hay título, generarlo ahora
+                display_title = row[9] if row[9] else generate_chat_title_from_messages(row[6], row[7])
+                
                 chats.append({
                     'session_id': row[0],
                     'project_id': str(row[1]) if row[1] else None,
                     'project_name': row[2] or 'Sin proyecto',
+                    'title': display_title,  # ¡AQUÍ ESTÁ EL TÍTULO!
                     'started_at': row[3].isoformat(),
                     'last_message_at': row[4].isoformat(),
                     'message_count': row[5],
-                    'last_message_preview': (row[6][:100] + '...') if len(row[6] or '') > 100 else (row[6] or ''),
-                    'last_bot_used': row[7] or 'unknown'
+                    'last_message_preview': (row[7][:60] + '...') if len(row[7] or '') > 60 else (row[7] or ''),
+                    'last_bot_used': row[8] or 'unknown'
                 })
         
         return jsonify({
@@ -1837,6 +2211,36 @@ def get_recent_chats(user):
     except Exception as e:
         print(f"❌ Error getting recent chats: {e}")
         return jsonify({'error': 'Could not get recent chats'}), 500
+
+def generate_chat_title_from_messages(first_message, last_message):
+    """Genera título a partir de mensajes si no existe"""
+    try:
+        if not first_message:
+            return "Nueva Conversación"
+        
+        # Intentar generar título simple basado en palabras clave
+        text = first_message.lower()
+        
+        if any(word in text for word in ['pitch', 'deck', 'presentacion']):
+            return "Pitch Deck"
+        elif any(word in text for word in ['inversor', 'investor', 'funding']):
+            return "Búsqueda Inversores"
+        elif any(word in text for word in ['marketing', 'contenido', 'seo']):
+            return "Marketing Strategy"
+        elif any(word in text for word in ['financi', 'modelo', 'revenue']):
+            return "Modelo Financiero"
+        elif any(word in text for word in ['plan', 'estrategia', 'negocio']):
+            return "Plan de Negocio"
+        elif any(word in text for word in ['competencia', 'mercado', 'analisis']):
+            return "Análisis de Mercado"
+        else:
+            # Usar las primeras palabras
+            words = first_message.split()[:3]
+            return " ".join(words).title()
+            
+    except Exception as e:
+        print(f"❌ Error generating simple title: {e}")
+        return "Nueva Conversación"
 
 # 2. ✅ ENDPOINT: /chat/messages/<session_id> - Obtener mensajes de un chat
 @app.route('/chat/messages/<session_id>', methods=['GET'])
@@ -1936,6 +2340,649 @@ def delete_chat_session(user, session_id):
     except Exception as e:
         print(f"❌ Error deleting chat session: {e}")
         return jsonify({'error': 'Could not delete chat session'}), 500
+
+
+@app.route('/documents/generate', methods=['POST'])
+@require_auth
+def generate_document_with_bot(user):
+    """Genera documento extenso usando bot específico"""
+    try:
+        data = request.get_json()
+        
+        if not data or not data.get('document_type') or not data.get('project_id'):
+            return jsonify({'error': 'document_type and project_id are required'}), 400
+        
+        document_type = data['document_type']  # 'pitch_deck', 'business_plan', 'marketing_plan'
+        project_id = data['project_id']
+        user_requirements = data.get('requirements', '')
+        
+        # Verificar proyecto
+        with engine.connect() as conn:
+            project_result = conn.execute(
+                text("SELECT * FROM projects WHERE id = :project_id AND user_id = :user_id"),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not project_result:
+                return jsonify({'error': 'Project not found'}), 404
+        
+        # Determinar bot y créditos requeridos
+        bot_config = {
+            'pitch_deck': {'bot': 'pitch_deck_master', 'credits': 100},
+            'business_plan': {'bot': 'strategy_consultant', 'credits': 150},
+            'marketing_plan': {'bot': 'content_machine', 'credits': 120},
+            'financial_model': {'bot': 'financial_modeler', 'credits': 130}
+        }
+        
+        if document_type not in bot_config:
+            return jsonify({'error': 'Invalid document type'}), 400
+        
+        bot_id = bot_config[document_type]['bot']
+        credits_required = bot_config[document_type]['credits']
+        
+        # Verificar créditos
+        if not has_sufficient_credits(user['id'], credits_required):
+            return jsonify({
+                'error': 'Insufficient credits',
+                'required': credits_required,
+                'available': get_user_credits(user['id'])
+            }), 402
+        
+        # Crear prompt especializado para documento extenso
+        project_data = json.loads(project_result[4]) if project_result[4] else {}
+        
+        prompts = {
+            'pitch_deck': f"""
+            Eres el mejor creador de pitch decks del mundo. Crea un pitch deck COMPLETO y DETALLADO para esta startup.
+            
+            INFORMACIÓN DEL PROYECTO:
+            - Nombre: {project_data.get('name', 'Mi Startup')}
+            - Industria: {project_data.get('industry', 'Technology')}
+            - Descripción: {project_data.get('description', '')}
+            - Etapa: {project_data.get('stage', 'Seed')}
+            
+            REQUISITOS ESPECÍFICOS:
+            {user_requirements}
+            
+            ESTRUCTURA REQUERIDA (crear cada sección en detalle):
+            1. **COVER SLIDE**: Nombre, tagline, logo placeholder
+            2. **PROBLEM**: Problema específico y dolor real
+            3. **SOLUTION**: Solución única y diferenciada
+            4. **MARKET SIZE**: TAM, SAM, SOM con números reales
+            5. **PRODUCT**: Features clave y demostración
+            6. **BUSINESS MODEL**: Cómo generas dinero
+            7. **TRACTION**: Métricas y logros actuales
+            8. **COMPETITION**: Análisis competitivo
+            9. **MARKETING**: Go-to-market strategy
+            10. **TEAM**: Fundadores y equipo clave
+            11. **FINANCIALS**: Proyecciones 3-5 años
+            12. **FUNDING**: Cantidad, uso de fondos, valoración
+            13. **TIMELINE**: Roadmap y milestones
+            14. **APPENDIX**: Información adicional
+            
+            FORMATO:
+            - Cada slide con título H2
+            - Contenido detallado y específico
+            - Números y métricas concretas
+            - Call-to-action en cada slide
+            - Mínimo 2000 palabras total
+            """,
+            
+            'business_plan': f"""
+            Crea un BUSINESS PLAN COMPLETO y PROFESIONAL para esta startup.
+            
+            INFORMACIÓN DEL PROYECTO:
+            - Nombre: {project_data.get('name', 'Mi Startup')}
+            - Industria: {project_data.get('industry', 'Technology')}
+            - Descripción: {project_data.get('description', '')}
+            
+            REQUISITOS:
+            {user_requirements}
+            
+            ESTRUCTURA COMPLETA:
+            
+            ## 1. EXECUTIVE SUMMARY
+            - Resumen ejecutivo de 2 páginas
+            - Propuesta de valor única
+            - Proyecciones financieras clave
+            - Funding necesario
+            
+            ## 2. COMPANY DESCRIPTION
+            - Historia y misión
+            - Visión y valores
+            - Estructura legal
+            - Ubicación y operaciones
+            
+            ## 3. MARKET ANALYSIS
+            - Análisis de industria
+            - Target market segmentation
+            - Market size (TAM, SAM, SOM)
+            - Trends y oportunidades
+            
+            ## 4. COMPETITIVE ANALYSIS
+            - Landscape competitivo
+            - Direct vs indirect competitors
+            - Análisis SWOT
+            - Ventaja competitiva sostenible
+            
+            ## 5. PRODUCTS & SERVICES
+            - Descripción detallada del producto
+            - Features y beneficios
+            - Roadmap de desarrollo
+            - Intellectual property
+            
+            ## 6. MARKETING & SALES STRATEGY
+            - Customer personas
+            - Marketing mix (4Ps)
+            - Sales funnel
+            - Customer acquisition strategy
+            - Pricing strategy
+            
+            ## 7. OPERATIONS PLAN
+            - Operational workflow
+            - Supply chain
+            - Technology infrastructure
+            - Quality control
+            
+            ## 8. MANAGEMENT TEAM
+            - Team bios y experiencia
+            - Organizational chart
+            - Advisory board
+            - Hiring plan
+            
+            ## 9. FINANCIAL PROJECTIONS
+            - 5-year P&L projection
+            - Cash flow analysis
+            - Break-even analysis
+            - Key financial ratios
+            - Funding requirements
+            
+            ## 10. RISK ANALYSIS
+            - Market risks
+            - Operational risks
+            - Financial risks
+            - Mitigation strategies
+            
+            Mínimo 4000 palabras con números específicos y análisis detallado.
+            """,
+            
+            'marketing_plan': f"""
+            Crea un MARKETING PLAN COMPLETO Y ESTRATÉGICO para esta startup.
+            
+            PROYECTO: {project_data.get('name', 'Mi Startup')}
+            INDUSTRIA: {project_data.get('industry', 'Technology')}
+            DESCRIPCIÓN: {project_data.get('description', '')}
+            
+            REQUISITOS ESPECÍFICOS:
+            {user_requirements}
+            
+            PLAN COMPLETO:
+            
+            ## 1. SITUATION ANALYSIS
+            - Current market position
+            - SWOT analysis
+            - Customer insights
+            - Competitive landscape
+            
+            ## 2. TARGET AUDIENCE
+            - Primary personas (3-5 detailed profiles)
+            - Secondary audiences
+            - Customer journey mapping
+            - Pain points y motivations
+            
+            ## 3. BRAND POSITIONING
+            - Brand identity y personality
+            - Unique value proposition
+            - Brand messaging framework
+            - Tone of voice
+            
+            ## 4. MARKETING OBJECTIVES
+            - SMART goals (1-2 años)
+            - KPIs y métricas
+            - Budget allocation
+            - ROI expectations
+            
+            ## 5. MARKETING STRATEGY
+            - Content marketing strategy
+            - SEO/SEM strategy
+            - Social media strategy
+            - Email marketing
+            - Influencer partnerships
+            - PR y media outreach
+            
+            ## 6. CHANNEL STRATEGY
+            - Digital channels priority
+            - Offline channels (si aplica)
+            - Channel integration
+            - Attribution modeling
+            
+            ## 7. CONTENT CALENDAR
+            - Editorial calendar (3 meses)
+            - Content pillars
+            - Content formats
+            - Distribution schedule
+            
+            ## 8. BUDGET & RESOURCES
+            - Marketing budget breakdown
+            - Team requirements
+            - Tools y software needed
+            - Expected CAC/LTV
+            
+            ## 9. IMPLEMENTATION TIMELINE
+            - 90-day action plan
+            - Monthly milestones
+            - Key deliverables
+            - Risk mitigation
+            
+            ## 10. MEASUREMENT & OPTIMIZATION
+            - Analytics setup
+            - Reporting framework
+            - A/B testing plan
+            - Optimization process
+            
+            Incluir ejemplos específicos, números y tácticas accionables. Mínimo 3000 palabras.
+            """
+        }
+        
+        # Generar documento con Gemini
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(
+            prompts[document_type],
+            generation_config={
+                "temperature": 0.7,
+                "top_p": 0.95,
+                "top_k": 40,
+                "max_output_tokens": 8000,  # Máximo para documentos extensos
+            }
+        )
+        
+        # Cobrar créditos
+        credits_after = charge_credits(user['id'], credits_required)
+        if credits_after is None:
+            return jsonify({'error': 'Could not charge credits'}), 500
+        
+        # Guardar documento
+        document_id = str(uuid.uuid4())
+        title = f"{document_type.replace('_', ' ').title()} - {project_data.get('name', 'Mi Startup')}"
+        
+        with engine.connect() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO generated_documents (
+                        id, user_id, bot_used, document_type, title, content, 
+                        format, metadata, credits_used, created_at, updated_at
+                    ) VALUES (
+                        :id, :user_id, :bot_used, :document_type, :title, :content,
+                        'markdown', :metadata, :credits_used, NOW(), NOW()
+                    )
+                """),
+                {
+                    "id": document_id,
+                    "user_id": user['id'],
+                    "bot_used": bot_id,
+                    "document_type": document_type,
+                    "title": title,
+                    "content": response.text,
+                    "metadata": json.dumps({
+                        "project_id": project_id,
+                        "word_count": len(response.text.split()),
+                        "generated_at": datetime.now().isoformat(),
+                        "user_requirements": user_requirements
+                    }),
+                    "credits_used": credits_required
+                }
+            )
+            conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'document_id': document_id,
+            'title': title,
+            'document_type': document_type,
+            'content_preview': response.text[:500] + '...',
+            'word_count': len(response.text.split()),
+            'credits_used': credits_required,
+            'credits_remaining': credits_after,
+            'download_url': f'/documents/{document_id}/download',
+            'view_url': f'/documents/{document_id}/view'
+        })
+        
+    except Exception as e:
+        print(f"❌ Error generating document: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Could not generate document: {str(e)}'}), 500
+
+@app.route('/documents/<document_id>/view', methods=['GET'])
+@require_auth
+def view_document(user, document_id):
+    """Ver contenido completo del documento"""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT title, content, document_type, created_at, metadata, bot_used
+                    FROM generated_documents 
+                    WHERE id = :document_id AND user_id = :user_id
+                """),
+                {"document_id": document_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not result:
+                return jsonify({'error': 'Document not found'}), 404
+            
+            # Incrementar contador de views
+            conn.execute(
+                text("UPDATE generated_documents SET download_count = download_count + 1 WHERE id = :document_id"),
+                {"document_id": document_id}
+            )
+            conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'document_id': document_id,
+            'title': result[0],
+            'content': result[1],
+            'document_type': result[2],
+            'created_at': result[3].isoformat(),
+            'metadata': json.loads(result[4]) if result[4] else {},
+            'bot_used': result[5]
+        })
+        
+    except Exception as e:
+        print(f"❌ Error viewing document: {e}")
+        return jsonify({'error': 'Could not view document'}), 500
+
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'docx', 'doc', 'md'}
+MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def extract_text_from_file(file_path, file_extension):
+    """Extrae texto de diferentes tipos de archivo"""
+    try:
+        if file_extension == 'txt' or file_extension == 'md':
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        
+        elif file_extension == 'pdf':
+            text = ""
+            with open(file_path, 'rb') as f:
+                pdf_reader = PyPDF2.PdfReader(f)
+                for page in pdf_reader.pages:
+                    text += page.extract_text() + "\n"
+            return text
+        
+        elif file_extension in ['docx', 'doc']:
+            doc = docx.Document(file_path)
+            text = ""
+            for paragraph in doc.paragraphs:
+                text += paragraph.text + "\n"
+            return text
+        
+        else:
+            return "Formato de archivo no soportado"
+            
+    except Exception as e:
+        print(f"❌ Error extracting text: {e}")
+        return f"Error extrayendo texto: {str(e)}"
+
+@app.route('/documents/upload', methods=['POST'])
+@require_auth
+def upload_document(user):
+    """Upload y análisis de documentos del usuario"""
+    try:
+        # Verificar que hay archivo
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        project_id = request.form.get('project_id')
+        document_purpose = request.form.get('purpose', 'general')  # 'analysis', 'reference', 'improvement'
+        
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        if not project_id:
+            return jsonify({'error': 'project_id is required'}), 400
+        
+        # Verificar proyecto
+        with engine.connect() as conn:
+            project_result = conn.execute(
+                text("SELECT id FROM projects WHERE id = :project_id AND user_id = :user_id"),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not project_result:
+                return jsonify({'error': 'Project not found'}), 404
+        
+        # Verificar archivo
+        if not allowed_file(file.filename):
+            return jsonify({
+                'error': 'File type not allowed',
+                'allowed_types': list(ALLOWED_EXTENSIONS)
+            }), 400
+        
+        # Verificar tamaño
+        file.seek(0, os.SEEK_END)
+        file_size = file.tell()
+        file.seek(0)
+        
+        if file_size > MAX_FILE_SIZE:
+            return jsonify({
+                'error': 'File too large',
+                'max_size_mb': MAX_FILE_SIZE / (1024 * 1024)
+            }), 400
+        
+        # Guardar archivo temporalmente
+        filename = secure_filename(file.filename)
+        file_extension = filename.rsplit('.', 1)[1].lower()
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}') as temp_file:
+            file.save(temp_file.name)
+            temp_path = temp_file.name
+        
+        try:
+            # Extraer texto del archivo
+            extracted_text = extract_text_from_file(temp_path, file_extension)
+            
+            # Analizar documento con Gemini
+            analysis = analyze_document_with_gemini(extracted_text, document_purpose, filename)
+            
+            # Guardar en base de datos
+            document_id = str(uuid.uuid4())
+            
+            with engine.connect() as conn:
+                conn.execute(
+                    text("""
+                        INSERT INTO generated_documents (
+                            id, user_id, bot_used, document_type, title, content, 
+                            format, metadata, credits_used, created_at, updated_at
+                        ) VALUES (
+                            :id, :user_id, 'document_upload', 'uploaded_document', :title, :content,
+                            :format, :metadata, 0, NOW(), NOW()
+                        )
+                    """),
+                    {
+                        "id": document_id,
+                        "user_id": user['id'],
+                        "title": f"📄 {filename}",
+                        "content": extracted_text,
+                        "format": file_extension,
+                        "metadata": json.dumps({
+                            "original_filename": filename,
+                            "file_size": file_size,
+                            "project_id": project_id,
+                            "purpose": document_purpose,
+                            "uploaded_at": datetime.now().isoformat(),
+                            "analysis": analysis,
+                            "file_type": file_extension,
+                            "character_count": len(extracted_text),
+                            "word_count": len(extracted_text.split())
+                        })
+                    }
+                )
+                conn.commit()
+            
+            # Limpiar archivo temporal
+            os.unlink(temp_path)
+            
+            return jsonify({
+                'success': True,
+                'document_id': document_id,
+                'filename': filename,
+                'file_size': file_size,
+                'text_extracted': len(extracted_text) > 0,
+                'word_count': len(extracted_text.split()),
+                'analysis': analysis,
+                'view_url': f'/documents/{document_id}/view'
+            })
+            
+        except Exception as e:
+            # Limpiar archivo temporal en caso de error
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            raise e
+        
+    except Exception as e:
+        print(f"❌ Error uploading document: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Could not upload document: {str(e)}'}), 500
+
+def analyze_document_with_gemini(text, purpose, filename):
+    """Analiza el documento subido con Gemini"""
+    try:
+        analysis_prompts = {
+            'analysis': f"""
+            Analiza este documento y proporciona un resumen ejecutivo profesional.
+            
+            Documento: {filename}
+            
+            Contenido:
+            {text[:4000]}  # Primeros 4000 caracteres
+            
+            Proporciona:
+            1. **Tipo de documento**: ¿Qué tipo de documento es?
+            2. **Resumen ejecutivo**: Resumen en 2-3 párrafos
+            3. **Puntos clave**: 5 puntos más importantes
+            4. **Fortalezas identificadas**: Qué está bien
+            5. **Áreas de mejora**: Qué se puede mejorar
+            6. **Recomendaciones**: 3 acciones específicas
+            """,
+            
+            'improvement': f"""
+            Actúa como consultor experto y analiza este documento para mejorarlo.
+            
+            Documento: {filename}
+            
+            Contenido:
+            {text[:4000]}
+            
+            Proporciona análisis detallado:
+            1. **Fortalezas actuales**: Qué funciona bien
+            2. **Debilidades identificadas**: Problemas específicos
+            3. **Mejoras estructurales**: Cómo reorganizar
+            4. **Mejoras de contenido**: Qué añadir/quitar
+            5. **Plan de acción**: 5 pasos para mejorar
+            6. **Versión mejorada**: Propuesta de estructura mejor
+            """,
+            
+            'reference': f"""
+            Este documento se usará como referencia. Analiza y extrae información útil.
+            
+            Documento: {filename}
+            
+            Contenido:
+            {text[:4000]}
+            
+            Extrae:
+            1. **Información clave**: Datos importantes
+            2. **Métricas y números**: Cifras relevantes
+            3. **Conceptos aplicables**: Ideas que se pueden usar
+            4. **Referencias útiles**: Fuentes o contactos
+            5. **Aplicación práctica**: Cómo usar esta información
+            """
+        }
+        
+        prompt = analysis_prompts.get(purpose, analysis_prompts['analysis'])
+        
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(
+            prompt,
+            generation_config={
+                "temperature": 0.5,
+                "max_output_tokens": 2000,
+            }
+        )
+        
+        return {
+            "analysis_type": purpose,
+            "analysis_content": response.text,
+            "analyzed_at": datetime.now().isoformat(),
+            "analysis_length": len(response.text)
+        }
+        
+    except Exception as e:
+        print(f"❌ Error analyzing document: {e}")
+        return {
+            "analysis_type": purpose,
+            "analysis_content": f"Error analizando documento: {str(e)}",
+            "analyzed_at": datetime.now().isoformat(),
+            "error": True
+        }
+
+@app.route('/documents/uploaded', methods=['GET'])
+@require_auth
+def get_uploaded_documents(user):
+    """Obtiene documentos subidos por el usuario"""
+    try:
+        project_id = request.args.get('project_id')
+        
+        base_query = """
+            SELECT id, title, created_at, metadata
+            FROM generated_documents 
+            WHERE user_id = :user_id AND document_type = 'uploaded_document'
+        """
+        
+        params = {"user_id": user['id']}
+        
+        if project_id:
+            base_query += " AND JSON_EXTRACT(metadata, '$.project_id') = :project_id"
+            params["project_id"] = project_id
+        
+        base_query += " ORDER BY created_at DESC"
+        
+        with engine.connect() as conn:
+            result = conn.execute(text(base_query), params).fetchall()
+            
+            documents = []
+            for row in result:
+                metadata = json.loads(row[3]) if row[3] else {}
+                
+                documents.append({
+                    'id': str(row[0]),
+                    'title': row[1],
+                    'original_filename': metadata.get('original_filename', 'Unknown'),
+                    'file_size': metadata.get('file_size', 0),
+                    'file_type': metadata.get('file_type', 'unknown'),
+                    'purpose': metadata.get('purpose', 'general'),
+                    'word_count': metadata.get('word_count', 0),
+                    'uploaded_at': row[2].isoformat(),
+                    'has_analysis': 'analysis' in metadata,
+                    'view_url': f'/documents/{row[0]}/view'
+                })
+        
+        return jsonify({
+            'success': True,
+            'uploaded_documents': documents,
+            'total_count': len(documents)
+        })
+        
+    except Exception as e:
+        print(f"❌ Error getting uploaded documents: {e}")
+        return jsonify({'error': 'Could not get uploaded documents'}), 500
         
 # ==============================================================================
 #           MAIN
