@@ -1427,7 +1427,7 @@ def handle_projects(user):
                     projects.append({
                         'id': str(row[0]),
                         'user_id': str(row[1]),
-                        'kpi_data': json.loads(row[2]) if row[2] else {},
+                        'kpi_data': json.loads(row[4]) if row[4] else {}, 
                         'status': row[3],
                         'created_at': row[4].isoformat()
                     })
