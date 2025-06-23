@@ -1446,7 +1446,9 @@ def handle_projects(user):
             
             # Generar ID del proyecto
             project_id = str(uuid.uuid4())
-            
+
+            project_name = data.get('name', 'Untitled Project')
+
             # Preparar datos del proyecto
             project_data = {
                 'name': data.get('name', ''),
@@ -1471,6 +1473,7 @@ def handle_projects(user):
                     {
                         "id": project_id,
                         "user_id": user['id'],
+                        "project_name": project_name,
                         "kpi_data": json.dumps(project_data),  # ← ARREGLO: json.dumps()
                         "status": "ONBOARDING"
                     }
