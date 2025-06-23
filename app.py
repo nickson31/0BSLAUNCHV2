@@ -1407,14 +1407,13 @@ def internal_error(error):
 @app.route('/projects', methods=['GET', 'POST'])
 @require_auth
 def handle_projects(user):
-    """Handle projects endpoint - ARREGLADO"""
+    """Handle projects endpoint - ESQUEMA CORRECTO"""
     try:
         if request.method == 'GET':
-            # GET projects from database
             with engine.connect() as conn:
                 result = conn.execute(
                     text("""
-                        SELECT id, user_id, project_name, kpi_data, status, created_at
+                        SELECT id, user_id, project_name, project_description, kpi_data, status, created_at
                         FROM projects 
                         WHERE user_id = :user_id
                         ORDER BY created_at DESC
@@ -1424,12 +1423,19 @@ def handle_projects(user):
                 
                 projects = []
                 for row in result:
+                    try:
+                        kpi_data = json.loads(row[4]) if row[4] else {}  # row[4] es kpi_data AHORA
+                    except:
+                        kpi_data = {}
+                    
                     projects.append({
                         'id': str(row[0]),
                         'user_id': str(row[1]),
-                        'kpi_data': json.loads(row[4]) if row[4] else {}, 
-                        'status': row[3],
-                        'created_at': row[4].isoformat()
+                        'project_name': row[2],
+                        'project_description': row[3],
+                        'kpi_data': kpi_data,
+                        'status': row[5],  # row[5] es status
+                        'created_at': row[6].isoformat() if row[6] else None  # row[6] es created_at
                     })
             
             return jsonify({
@@ -1440,16 +1446,13 @@ def handle_projects(user):
         
         elif request.method == 'POST':
             data = request.get_json()
-            
             if not data:
                 return jsonify({'error': 'No data provided'}), 400
             
-            # Generar ID del proyecto
             project_id = str(uuid.uuid4())
-
             project_name = data.get('name', 'Untitled Project')
-
-            # Preparar datos del proyecto
+            project_description = data.get('description', '')
+            
             project_data = {
                 'name': data.get('name', ''),
                 'description': data.get('description', ''),
@@ -1460,21 +1463,21 @@ def handle_projects(user):
                 'created_by': user['email']
             }
             
-            # Insertar en base de datos
             with engine.connect() as conn:
                 conn.execute(
                     text("""
                         INSERT INTO projects (
-                            id, user_id, project_name, kpi_data, status, created_at
+                            id, user_id, project_name, project_description, kpi_data, status, created_at
                         ) VALUES (
-                            :id, :user_id, :project_name, :kpi_data, :status, NOW()
+                            :id, :user_id, :project_name, :project_description, :kpi_data, :status, NOW()
                         )
                     """),
                     {
                         "id": project_id,
                         "user_id": user['id'],
                         "project_name": project_name,
-                        "kpi_data": json.dumps(project_data),  # ← ARREGLO: json.dumps()
+                        "project_description": project_description,
+                        "kpi_data": json.dumps(project_data),
                         "status": "ONBOARDING"
                     }
                 )
@@ -1484,19 +1487,11 @@ def handle_projects(user):
             return jsonify({
                 'success': True,
                 'message': 'Project created successfully',
-                'project_id': project_id,
-                'project': {
-                    'id': project_id,
-                    'user_id': user['id'],
-                    'kpi_data': project_data,
-                    'status': 'ONBOARDING'
-                }
+                'project_id': project_id
             })
             
     except Exception as e:
         print(f"❌ Error in projects endpoint: {e}")
-        import traceback
-        traceback.print_exc()
         return jsonify({'error': f'Database error: {str(e)}'}), 500
 # ==============================================================================
 #           MAIN
