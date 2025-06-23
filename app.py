@@ -740,24 +740,50 @@ def check_and_generate_session_title(session_id, user_id, interaction_data):
         print(f"❌ Error generating session title: {e}")
 
 def generate_chat_title_with_gemini(user_input, bot_response):
-    """Genera título inteligente usando Gemini"""
+    """Genera título inteligente usando Gemini - MULTIIDIOMA"""
     try:
-        title_prompt = f"""
-        Genera un título corto y descriptivo (máximo 5 palabras) para esta conversación.
-        El título debe capturar la esencia de lo que el usuario está preguntando o trabajando.
+        # Primero detectar el idioma
+        user_language = detect_user_language_with_gemini(user_input)
         
-        Usuario preguntó: {user_input[:200]}
-        Asistente respondió sobre: {bot_response[:200]}
+        # Prompts en diferentes idiomas
+        title_prompts = {
+            'es': f"""
+            Genera un título corto y descriptivo (máximo 5 palabras) para esta conversación.
+            El título debe capturar la esencia de lo que el usuario está preguntando o trabajando.
+            
+            Usuario preguntó: {user_input[:200]}
+            Asistente respondió sobre: {bot_response[:200]}
+            
+            Ejemplos de buenos títulos:
+            - "Pitch Deck para FinTech"
+            - "Buscar Inversores Seed"
+            - "Plan Marketing SaaS"
+            - "Análisis Competencia EdTech"
+            - "Modelo Financiero B2B"
+            
+            Responde SOLO con el título en español, sin comillas ni explicaciones:
+            """,
+            
+            'en': f"""
+            Generate a short and descriptive title (maximum 5 words) for this conversation.
+            The title should capture the essence of what the user is asking or working on.
+            
+            User asked: {user_input[:200]}
+            Assistant responded about: {bot_response[:200]}
+            
+            Examples of good titles:
+            - "FinTech Pitch Deck"
+            - "Find Seed Investors"
+            - "SaaS Marketing Plan"
+            - "EdTech Competition Analysis"
+            - "B2B Financial Model"
+            
+            Respond ONLY with the title in English, no quotes or explanations:
+            """
+        }
         
-        Ejemplos de buenos títulos:
-        - "Pitch Deck para FinTech"
-        - "Buscar Inversores Seed"
-        - "Marketing Plan SaaS"
-        - "Análisis Competencia EdTech"
-        - "Modelo Financiero B2B"
-        
-        Responde SOLO con el título, sin comillas ni explicaciones:
-        """
+        # Use appropriate prompt based on language
+        title_prompt = title_prompts.get(user_language, title_prompts['en'])
         
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(
@@ -777,7 +803,17 @@ def generate_chat_title_with_gemini(user_input, bot_response):
         if len(title) > 50:
             title = title[:47] + "..."
         
-        return title if title else "Nueva Conversación"
+        # Títulos por defecto según idioma
+        default_titles = {
+            'es': "Nueva Conversación",
+            'en': "New Conversation",
+            'fr': "Nouvelle Conversation",
+            'de': "Neues Gespräch",
+            'pt': "Nova Conversa",
+            'it': "Nuova Conversazione"
+        }
+        
+        return title if title else default_titles.get(user_language, "New Conversation")
         
     except Exception as e:
         print(f"❌ Error generating title: {e}")
@@ -853,36 +889,71 @@ def extract_and_update_project_memory(user_id, project_id, user_input, bot_respo
 
 def extract_business_info(text):
     """
-    Extrae información de negocio del texto usando Gemini
+    Extrae información de negocio del texto usando Gemini - MULTIIDIOMA
     """
     try:
-        extraction_prompt = f"""
-        Analiza el siguiente texto y extrae SOLO la información de negocio específica que mencione el usuario.
-        NO inventes información que no esté explícitamente mencionada.
+        # Detectar idioma primero
+        detected_language = detect_user_language_with_gemini(text[:200])
         
-        Texto: {text}
+        extraction_prompts = {
+            'es': f"""
+            Analiza el siguiente texto y extrae SOLO la información de negocio específica que mencione el usuario.
+            NO inventes información que no esté explícitamente mencionada.
+            
+            Texto: {text}
+            
+            Devuelve SOLO un JSON con esta estructura (solo incluye campos que tengan información real):
+            {{
+                "startup_name": "nombre si se menciona",
+                "industry": "industria específica si se menciona", 
+                "stage": "etapa si se menciona (idea, mvp, seed, series_a, etc)",
+                "business_model": "modelo de negocio si se describe",
+                "target_market": "mercado objetivo si se especifica",
+                "problem_solving": "problema que resuelve si se explica",
+                "revenue_model": "como genera dinero si se menciona",
+                "team_size": "tamaño del equipo si se menciona",
+                "location": "ubicación si se especifica",
+                "funding_raised": "dinero levantado si se menciona",
+                "funding_needed": "dinero que necesita si se menciona",
+                "competitors": ["competidores si se mencionan"],
+                "key_metrics": "métricas clave si se mencionan",
+                "current_challenges": ["retos actuales si se mencionan"],
+                "business_type": "real_startup, side_project, o idea_stage"
+            }}
+            
+            Si no hay información específica, devuelve {{}}.
+            """,
+            
+            'en': f"""
+            Analyze the following text and extract ONLY the specific business information mentioned by the user.
+            DO NOT invent information that is not explicitly mentioned.
+            
+            Text: {text}
+            
+            Return ONLY a JSON with this structure (only include fields that have real information):
+            {{
+                "startup_name": "name if mentioned",
+                "industry": "specific industry if mentioned", 
+                "stage": "stage if mentioned (idea, mvp, seed, series_a, etc)",
+                "business_model": "business model if described",
+                "target_market": "target market if specified",
+                "problem_solving": "problem being solved if explained",
+                "revenue_model": "how it makes money if mentioned",
+                "team_size": "team size if mentioned",
+                "location": "location if specified",
+                "funding_raised": "money raised if mentioned",
+                "funding_needed": "money needed if mentioned",
+                "competitors": ["competitors if mentioned"],
+                "key_metrics": "key metrics if mentioned",
+                "current_challenges": ["current challenges if mentioned"],
+                "business_type": "real_startup, side_project, or idea_stage"
+            }}
+            
+            If there's no specific information, return {{}}.
+            """
+        }
         
-        Devuelve SOLO un JSON con esta estructura (solo incluye campos que tengan información real):
-        {{
-            "startup_name": "nombre si se menciona",
-            "industry": "industria específica si se menciona", 
-            "stage": "etapa si se menciona (idea, mvp, seed, series_a, etc)",
-            "business_model": "modelo de negocio si se describe",
-            "target_market": "mercado objetivo si se especifica",
-            "problem_solving": "problema que resuelve si se explica",
-            "revenue_model": "como genera dinero si se menciona",
-            "team_size": "tamaño del equipo si se menciona",
-            "location": "ubicación si se especifica",
-            "funding_raised": "dinero levantado si se menciona",
-            "funding_needed": "dinero que necesita si se menciona",
-            "competitors": ["competidores si se mencionan"],
-            "key_metrics": "métricas clave si se mencionan",
-            "current_challenges": ["retos actuales si se mencionan"],
-            "business_type": "real_startup, side_project, o idea_stage"
-        }}
-        
-        Si no hay información específica, devuelve {{}}.
-        """
+        extraction_prompt = extraction_prompts.get(detected_language, extraction_prompts['en'])
         
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(
@@ -952,6 +1023,54 @@ def merge_memory_data(current_memory, new_info):
         print(f"❌ Error merging memory data: {e}")
         return current_memory or {}
 
+def detect_user_language_with_gemini(text):
+    """Detecta el idioma del usuario usando Gemini - VERSIÓN INTELIGENTE"""
+    try:
+        if not text or len(text.strip()) < 3:
+            return 'en'  # Default to English for very short inputs
+        
+        detection_prompt = f"""
+        Detect the language of this text and respond with ONLY the ISO 639-1 language code (2 letters).
+        
+        Text: "{text}"
+        
+        Examples of responses:
+        - For English text: en
+        - For Spanish text: es
+        - For French text: fr
+        - For German text: de
+        - For Portuguese text: pt
+        - For Italian text: it
+        
+        Respond with ONLY the 2-letter code, nothing else:
+        """
+        
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(
+            detection_prompt,
+            generation_config={
+                "temperature": 0.1,  # Very low temperature for consistent detection
+                "max_output_tokens": 10,
+            }
+        )
+        
+        detected_language = response.text.strip().lower()[:2]  # Get only first 2 letters
+        
+        # Validate the response
+        valid_languages = ['en', 'es', 'fr', 'de', 'pt', 'it', 'nl', 'ru', 'zh', 'ja', 'ko', 'ar']
+        
+        if detected_language in valid_languages:
+            print(f"🌍 Detected language: {detected_language} for text: '{text[:50]}...'")
+            return detected_language
+        else:
+            print(f"⚠️ Invalid language code detected: {detected_language}, defaulting to English")
+            return 'en'
+            
+    except Exception as e:
+        print(f"❌ Error detecting language with Gemini: {e}")
+        # Fallback to simple detection if Gemini fails
+        return detect_user_language_simple_fallback(text)
+        
 def get_enhanced_context_for_chat(user, session_id, project_id, data):
     """Obtiene contexto mejorado para el chat - VERSIÓN CORRECTA"""
     try:
@@ -1094,23 +1213,38 @@ def generate_context_summary(business_context, recent_chats):
         return "Error generando resumen de contexto"
 
 def get_enhanced_context_for_chat(user, session_id, project_id, data):
-    """Obtiene contexto mejorado para el chat"""
-    
-    # Obtener contexto del proyecto
-    project_context = get_project_context_for_chat(user['id'], project_id)
-    
-    # Contexto base
-    enhanced_context = {
-        'user_id': user['id'],
-        'user_plan': user.get('subscription_plan', user.get('plan', 'free')),  # Compatibilidad
-        'session_id': session_id,
-        'project_id': project_id,
-        'user_credits_before': get_user_credits(user['id']),
-        **data.get('context', {}),
-        **project_context
-    }
-    
-    return enhanced_context
+    """Obtiene contexto mejorado para el chat - CON DETECCIÓN DE IDIOMA GEMINI"""
+    try:
+        # Obtener contexto del proyecto
+        project_context = get_project_context_for_chat(user['id'], project_id)
+        
+        # DETECTAR IDIOMA CON GEMINI
+        user_message = data.get('message', '')
+        detected_language = detect_user_language_with_gemini(user_message)
+        
+        # Contexto base
+        enhanced_context = {
+            'user_id': user['id'],
+            'user_plan': user.get('plan', 'free'),
+            'session_id': session_id,
+            'project_id': project_id,
+            'user_credits_before': get_user_credits(user['id']),
+            'user_language': detected_language,  # IDIOMA DETECTADO POR GEMINI
+            'user_message': user_message,
+            **data.get('context', {}),
+            **project_context
+        }
+        
+        return enhanced_context
+    except Exception as e:
+        print(f"❌ Error getting enhanced context: {e}")
+        return {
+            'user_id': user['id'],
+            'user_plan': user.get('plan', 'free'),
+            'session_id': session_id,
+            'project_id': project_id,
+            'user_language': 'en'  # Default language
+        }
         
 # ==============================================================================
 #           BOT SYSTEM
@@ -1195,16 +1329,20 @@ def _build_smart_prompt(self, user_input, user_context):
         user_language = user_context.get('user_language', 'en')
         recent_conversations = user_context.get('recent_conversation_context', [])
         
-        # DETERMINAR IDIOMA PARA EL PROMPT
-        language_instruction = {
-            'es': "Responde SIEMPRE en español.",
-            'en': "Respond ALWAYS in English.",
-        }.get(user_language, "Respond in the same language as the user.")
+        # INSTRUCCIONES DE IDIOMA MEJORADAS
+        language_instructions = {
+            'es': "IMPORTANTE: Responde SIEMPRE en español. Toda tu respuesta debe estar en español.",
+            'en': "IMPORTANT: Respond ALWAYS in English. Your entire response must be in English.",
+            'fr': "IMPORTANT: Répondez TOUJOURS en français. Toute votre réponse doit être en français.",
+            'de': "WICHTIG: Antworten Sie IMMER auf Deutsch. Ihre gesamte Antwort muss auf Deutsch sein.",
+            'pt': "IMPORTANTE: Responda SEMPRE em português. Toda a sua resposta deve estar em português.",
+            'it': "IMPORTANTE: Rispondi SEMPRE in italiano. Tutta la tua risposta deve essere in italiano.",
+        }.get(user_language, f"Respond in the same language as the user. The user wrote in language code: {user_language}")
         
         prompt = f"""
         You are an expert startup mentor with 50+ successful exits.
         
-        {language_instruction}
+        {language_instructions}
         
         PROJECT CONTEXT:
         - Industry: {business_context.get('industry', 'Not specified')}
@@ -1221,19 +1359,21 @@ def _build_smart_prompt(self, user_input, user_context):
         
         USER ASKS: {user_input}
         
-        INSTRUCTIONS:
-        - {language_instruction}
-        - Respond as an experienced mentor, not as AI
-        - Give practical and actionable advice
-        - If they ask for documents (pitch deck, business plan), offer to generate them
-        - Be honest about entrepreneurship challenges
-        - Use real examples when appropriate
-        - Adjust your response to their level (idea vs real startup)
-        - Length: 100-800 words depending on complexity
+        CRITICAL INSTRUCTIONS:
+        1. {language_instructions}
+        2. Respond as an experienced mentor, not as AI
+        3. Give practical and actionable advice
+        4. If they ask for documents (pitch deck, business plan), offer to generate them
+        5. Be honest about entrepreneurship challenges
+        6. Use real examples when appropriate
+        7. Adjust your response to their level (idea vs real startup)
+        8. Length: 100-800 words depending on complexity
+        
+        Remember: THE LANGUAGE IS CRITICAL. User language detected: {user_language}
         
         If plan is 'free' and they need advanced features, naturally mention upgrade benefits.
         
-        Respond directly, practically, and helpfully:
+        Respond directly, practically, and helpfully IN THE CORRECT LANGUAGE:
         """
         
         return prompt
@@ -2243,35 +2383,7 @@ def get_recent_chats_with_titles(user):
         print(f"❌ Error getting recent chats: {e}")
         return jsonify({'error': 'Could not get recent chats'}), 500
 
-def generate_chat_title_from_messages(first_message, last_message):
-    """Genera título a partir de mensajes si no existe"""
-    try:
-        if not first_message:
-            return "Nueva Conversación"
-        
-        # Intentar generar título simple basado en palabras clave
-        text = first_message.lower()
-        
-        if any(word in text for word in ['pitch', 'deck', 'presentacion']):
-            return "Pitch Deck"
-        elif any(word in text for word in ['inversor', 'investor', 'funding']):
-            return "Búsqueda Inversores"
-        elif any(word in text for word in ['marketing', 'contenido', 'seo']):
-            return "Marketing Strategy"
-        elif any(word in text for word in ['financi', 'modelo', 'revenue']):
-            return "Modelo Financiero"
-        elif any(word in text for word in ['plan', 'estrategia', 'negocio']):
-            return "Plan de Negocio"
-        elif any(word in text for word in ['competencia', 'mercado', 'analisis']):
-            return "Análisis de Mercado"
-        else:
-            # Usar las primeras palabras
-            words = first_message.split()[:3]
-            return " ".join(words).title()
-            
-    except Exception as e:
-        print(f"❌ Error generating simple title: {e}")
-        return "Nueva Conversación"
+
 
 # 2. ✅ ENDPOINT: /chat/messages/<session_id> - Obtener mensajes de un chat
 @app.route('/chat/messages/<session_id>', methods=['GET'])
