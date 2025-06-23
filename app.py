@@ -1119,21 +1119,7 @@ def get_credits_balance(user):
 @require_auth
 def create_new_chat(user):
     """
-    Crea una nueva conversación asociada a un proyecto
-    VERSIÓN FINAL - Ahora que la tabla projects está correcta
-    
-    REQUEST BODY:
-    {
-        "project_id": "uuid-optional"  // OPCIONAL
-    }
-    
-    RESPONSE:
-    {
-        "success": true,
-        "session_id": "uuid",
-        "project_id": "uuid", 
-        "message": "New chat session created successfully"
-    }
+    VERSIÓN CORREGIDA - Arregla el INSERT que falta updated_at
     """
     try:
         data = request.get_json() or {}
@@ -1163,14 +1149,15 @@ def create_new_chat(user):
                     project_id = str(uuid.uuid4())
                     print(f"📝 Creating default project: {project_id}")
                     
+                    # ✅ ESTE ES EL PROBLEMA - FALTA updated_at EN EL INSERT
                     conn.execute(
                         text("""
                             INSERT INTO projects (
                                 id, user_id, project_name, project_description, 
-                                kpi_data, status, created_at
+                                kpi_data, status, created_at, updated_at
                             ) VALUES (
                                 :id, :user_id, :project_name, :project_description, 
-                                :kpi_data, :status, NOW()
+                                :kpi_data, :status, NOW(), NOW()
                             )
                         """),
                         {
