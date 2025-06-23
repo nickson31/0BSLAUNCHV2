@@ -645,17 +645,17 @@ def init_neural_memory(user_id):
         print(f"❌ Error initializing neural memory: {e}")
 
 def save_neural_interaction(user_id, interaction_data):
-    """Guarda interacción en memoria neuronal"""
+    """Guarda interacción en memoria neuronal CON PROJECT_ID"""
     try:
         with engine.connect() as conn:
             conn.execute(
                 text("""
                     INSERT INTO neural_interactions (
                         id, user_id, bot_used, user_input, bot_output, 
-                        credits_charged, context_data, session_id, created_at
+                        credits_charged, context_data, session_id, project_id, created_at
                     ) VALUES (
                         :id, :user_id, :bot_used, :user_input, :bot_output,
-                        :credits_charged, :context_data, :session_id, NOW()
+                        :credits_charged, :context_data, :session_id, :project_id, NOW()
                     )
                 """),
                 {
@@ -666,12 +666,14 @@ def save_neural_interaction(user_id, interaction_data):
                     "bot_output": interaction_data.get('response', ''),
                     "credits_charged": interaction_data.get('credits_used', 0),
                     "context_data": json.dumps(interaction_data.get('context', {})),
-                    "session_id": interaction_data.get('session_id')
+                    "session_id": interaction_data.get('session_id'),
+                    "project_id": interaction_data.get('project_id')
                 }
             )
             conn.commit()
+            print(f"✅ Interaction saved with project_id: {interaction_data.get('project_id')}")
     except Exception as e:
-        print(f"Error saving interaction: {e}")
+        print(f"❌ Error saving interaction: {e}")
 
 def get_neural_memory(user_id):
     """Obtiene memoria neuronal del usuario"""
@@ -753,7 +755,8 @@ class BotManager:
                 'response': ai_response.text,
                 'credits_used': required_credits,
                 'context': user_context,
-                'session_id': user_context.get('session_id')
+                'session_id': user_context.get('session_id'),
+                'project_id': user_context.get('project_id')
             })
             
             # 5. RETORNAR RESPUESTA
@@ -1115,33 +1118,60 @@ def get_credits_balance(user):
 @app.route('/chat/new', methods=['POST'])
 @require_auth
 def create_new_chat(user):
-    """Crea una nueva conversación y devuelve el session_id"""
+    """
+    Crea una nueva conversación asociada a un proyecto
+    
+    REQUEST BODY:
+    {
+        "project_id": "uuid-required"  // OBLIGATORIO AHORA
+    }
+    
+    RESPONSE:
+    {
+        "success": true,
+        "session_id": "uuid",
+        "project_id": "uuid", 
+        "message": "New chat session created for project"
+    }
+    """
     try:
+        data = request.get_json()
+        
+        # VALIDAR que project_id esté presente
+        if not data or not data.get('project_id'):
+            return jsonify({'error': 'project_id is required'}), 400
+        
+        project_id = data['project_id']
+        
+        # VERIFICAR que el proyecto pertenece al usuario
+        with engine.connect() as conn:
+            project_check = conn.execute(
+                text("SELECT id FROM projects WHERE id = :project_id AND user_id = :user_id"),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not project_check:
+                return jsonify({'error': 'Project not found or access denied'}), 404
+        
         session_id = str(uuid.uuid4())
         
         return jsonify({
             'success': True,
             'session_id': session_id,
-            'message': 'New chat session created'
+            'project_id': project_id,
+            'message': 'New chat session created for project'
         })
         
     except Exception as e:
-        print(f"Error creating new chat: {e}")
-        return jsonify({'error': str(e)}), 500
+        print(f"❌ Error creating new chat: {e}")
+        return jsonify({'error': 'Could not create new chat session'}), 500
 
 @app.route('/chat/bot', methods=['POST'])
 @require_auth
 def chat_with_bot(user):
     """
     Procesa mensaje del usuario y retorna respuesta del bot
-    CON CRÉDITOS CORRECTOS EN TIEMPO REAL
-    
-    REQUEST BODY:
-    {
-        "message": "tu mensaje aquí",           // OBLIGATORIO
-        "session_id": "uuid-opcional",         // OPCIONAL
-        "context": {...}                       // OPCIONAL
-    }
+    CON PROJECTS
     """
     try:
         data = request.get_json()
@@ -1152,6 +1182,33 @@ def chat_with_bot(user):
             
         if not data.get('message'):
             return jsonify({'error': 'Message is required'}), 400
+            
+        if not data.get('project_id'):
+            return jsonify({'error': 'project_id is required'}), 400
+        
+        project_id = data['project_id']
+        
+        # VERIFICAR que el proyecto pertenece al usuario
+        with engine.connect() as conn:
+            project_result = conn.execute(
+                text("""
+                    SELECT id, project_name, project_description, kpi_data 
+                    FROM projects 
+                    WHERE id = :project_id AND user_id = :user_id
+                """),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not project_result:
+                return jsonify({'error': 'Project not found or access denied'}), 404
+        
+        # EXTRAER CONTEXTO DEL PROYECTO
+        project_context = {
+            'project_id': project_id,
+            'project_name': project_result[1],
+            'project_description': project_result[2],
+            'project_data': json.loads(project_result[3]) if project_result[3] else {}
+        }
         
         # GENERAR O USAR SESSION_ID EXISTENTE
         session_id = data.get('session_id')
@@ -1174,15 +1231,17 @@ def chat_with_bot(user):
                 'required': credits_required,
                 'available': user_credits_before,
                 'upgrade_needed': True
-            }), 402  # Payment Required
+            }), 402
             
-        # PREPARAR CONTEXTO MEJORADO
+        # PREPARAR CONTEXTO MEJORADO CON PROYECTO
         enhanced_context = {
             'user_id': user['id'],
             'user_plan': user['subscription_plan'],
             'session_id': session_id,
+            'project_id': project_id,
             'is_new_chat': is_new_chat,
             'user_credits_before': user_credits_before,
+            **project_context,
             **data.get('context', {})
         }
         
@@ -1207,15 +1266,12 @@ def chat_with_bot(user):
         return jsonify({
             'success': True,
             'session_id': session_id,
+            'project_id': project_id,
             'is_new_chat': is_new_chat,
             'message_id': str(uuid.uuid4()),
-            
-            # ✅ INFORMACIÓN CORRECTA DE CRÉDITOS
             'credits_before': user_credits_before,
             'credits_used': credits_actually_used,
-            'credits_remaining': user_credits_after,  # ✅ ESTE ES EL CORRECTO
-            
-            # Respuesta del bot
+            'credits_remaining': user_credits_after,
             **response
         })
         
@@ -1603,46 +1659,62 @@ def handle_projects(user):
 @require_auth
 def get_recent_chats(user):
     """
-    Obtiene los chats recientes del usuario - SQL ARREGLADO
-    
-    QUERY PARAMETERS:
-    - limit: número de chats (default: 10, max: 50)
+    Obtiene chats recientes del usuario, opcionalmente filtrados por proyecto
     """
     try:
-        limit = min(int(request.args.get('limit', 10)), 50)  # Max 50 chats
+        limit = min(int(request.args.get('limit', 10)), 50)
+        project_id = request.args.get('project_id')
+        
+        # CONSTRUIR QUERY DINÁMICAMENTE
+        base_query = """
+            SELECT 
+                COALESCE(ni.session_id::text, ni.id::text) as session_id,
+                ni.project_id,
+                p.project_name,
+                MIN(ni.created_at) as started_at,
+                MAX(ni.created_at) as last_message_at,
+                COUNT(*) as message_count,
+                (array_agg(ni.user_input ORDER BY ni.created_at DESC))[1] as last_message_preview,
+                (array_agg(ni.bot_used ORDER BY ni.created_at DESC))[1] as last_bot_used
+            FROM neural_interactions ni
+            LEFT JOIN projects p ON ni.project_id = p.id
+            WHERE ni.user_id = :user_id
+        """
+        
+        params = {"user_id": user['id'], "limit": limit}
+        
+        # FILTRAR POR PROYECTO SI SE ESPECIFICA
+        if project_id:
+            base_query += " AND ni.project_id = :project_id"
+            params["project_id"] = project_id
+        
+        base_query += """
+            GROUP BY COALESCE(ni.session_id::text, ni.id::text), ni.project_id, p.project_name
+            ORDER BY MAX(ni.created_at) DESC
+            LIMIT :limit
+        """
         
         with engine.connect() as conn:
-            # ✅ SQL ARREGLADO - Convertir ambos a TEXT
-            result = conn.execute(text("""
-                SELECT 
-                    COALESCE(session_id::text, id::text) as session_id,
-                    MIN(created_at) as started_at,
-                    MAX(created_at) as last_message_at,
-                    COUNT(*) as message_count,
-                    (array_agg(user_input ORDER BY created_at DESC))[1] as last_message_preview,
-                    (array_agg(bot_used ORDER BY created_at DESC))[1] as last_bot_used
-                FROM neural_interactions 
-                WHERE user_id = :user_id 
-                GROUP BY COALESCE(session_id::text, id::text)
-                ORDER BY MAX(created_at) DESC
-                LIMIT :limit
-            """), {"user_id": user['id'], "limit": limit}).fetchall()
+            result = conn.execute(text(base_query), params).fetchall()
             
             chats = []
             for row in result:
                 chats.append({
                     'session_id': row[0],
-                    'started_at': row[1].isoformat(),
-                    'last_message_at': row[2].isoformat(),
-                    'message_count': row[3],
-                    'last_message_preview': (row[4][:100] + '...') if len(row[4] or '') > 100 else (row[4] or ''),
-                    'last_bot_used': row[5] or 'unknown'
+                    'project_id': str(row[1]) if row[1] else None,
+                    'project_name': row[2] or 'Sin proyecto',
+                    'started_at': row[3].isoformat(),
+                    'last_message_at': row[4].isoformat(),
+                    'message_count': row[5],
+                    'last_message_preview': (row[6][:100] + '...') if len(row[6] or '') > 100 else (row[6] or ''),
+                    'last_bot_used': row[7] or 'unknown'
                 })
         
         return jsonify({
             'success': True,
             'chats': chats,
-            'total_count': len(chats)
+            'total_count': len(chats),
+            'filtered_by_project': project_id is not None
         })
         
     except Exception as e:
@@ -1661,9 +1733,10 @@ def get_chat_messages(user, session_id):
     try:
         with engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT id, bot_used, user_input, bot_output, credits_charged, 
-                       context_data, created_at
-                FROM neural_interactions
+                SELECT ni.id, ni.bot_used, ni.user_input, ni.bot_output, ni.credits_charged, 
+       ni.context_data, ni.created_at, ni.project_id, p.project_name
+                FROM neural_interactions ni
+LEFT JOIN projects p ON ni.project_id = p.id
                 WHERE user_id = :user_id 
                 AND (session_id::text = :session_id OR id::text = :session_id)
                 ORDER BY created_at ASC
@@ -1724,7 +1797,7 @@ def delete_chat_session(user, session_id):
             count_result = conn.execute(text("""
                 SELECT COUNT(*) FROM neural_interactions
                 WHERE user_id = :user_id 
-                AND (session_id = :session_id OR id::text = :session_id)
+                AND (ni.session_id::text = :session_id OR ni.id::text = :session_id)
             """), {"user_id": user['id'], "session_id": session_id}).scalar()
             
             if count_result == 0:
@@ -1734,7 +1807,7 @@ def delete_chat_session(user, session_id):
             conn.execute(text("""
                 DELETE FROM neural_interactions
                 WHERE user_id = :user_id 
-                AND (session_id = :session_id OR id::text = :session_id)
+                AND (ni.session_id::text = :session_id OR ni.id::text = :session_id)
             """), {"user_id": user['id'], "session_id": session_id})
             
             conn.commit()
