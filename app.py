@@ -952,6 +952,34 @@ def merge_memory_data(current_memory, new_info):
         print(f"❌ Error merging memory data: {e}")
         return current_memory or {}
 
+def get_enhanced_context_for_chat(user, session_id, project_id, data):
+    """Obtiene contexto mejorado para el chat - VERSIÓN CORRECTA"""
+    try:
+        # Obtener contexto del proyecto
+        project_context = get_project_context_for_chat(user['id'], project_id)
+        
+        # Contexto base
+        enhanced_context = {
+            'user_id': user['id'],
+            'user_plan': user.get('plan', 'free'),  # usar 'plan' no 'subscription_plan'
+            'session_id': session_id,
+            'project_id': project_id,
+            'user_credits_before': get_user_credits(user['id']),
+            'user_language': detect_user_language(data.get('message', '')),  # DETECTAR IDIOMA
+            **data.get('context', {}),
+            **project_context
+        }
+        
+        return enhanced_context
+    except Exception as e:
+        print(f"❌ Error getting enhanced context: {e}")
+        return {
+            'user_id': user['id'],
+            'user_plan': user.get('plan', 'free'),
+            'session_id': session_id,
+            'project_id': project_id
+        }
+        
 def get_project_context_for_chat(user_id, project_id):
     """
     Obtiene el contexto completo del proyecto para el chat - OPTIMIZADO
@@ -1100,6 +1128,7 @@ class BotManager:
             print(f"   - Usuario: {user_id}")
             print(f"   - Créditos antes: {credits_before}")
             print(f"   - Créditos requeridos: {required_credits}")
+            print(f"   - Idioma detectado: {user_context.get('user_language', 'en')}")
             
             if credits_before < required_credits:
                 return {
@@ -1163,52 +1192,62 @@ def _build_smart_prompt(self, user_input, user_context):
         # Obtener información del contexto
         business_context = user_context.get('business_context', {})
         user_plan = user_context.get('user_plan', 'free')
+        user_language = user_context.get('user_language', 'en')
         recent_conversations = user_context.get('recent_conversation_context', [])
         
+        # DETERMINAR IDIOMA PARA EL PROMPT
+        language_instruction = {
+            'es': "Responde SIEMPRE en español.",
+            'en': "Respond ALWAYS in English.",
+        }.get(user_language, "Respond in the same language as the user.")
+        
         prompt = f"""
-        Eres un mentor de startups experto y experimentado. Has ayudado a crear 50+ startups exitosas.
+        You are an expert startup mentor with 50+ successful exits.
         
-        CONTEXTO DEL PROYECTO:
-        - Industria: {business_context.get('industry', 'No especificada')}
-        - Etapa: {business_context.get('stage', 'Inicial')}
-        - Tipo: {business_context.get('business_type', 'Proyecto')}
-        - Problema que resuelve: {business_context.get('problem_solving', 'No definido')}
-        - Plan del usuario: {user_plan}
+        {language_instruction}
         
-        CONVERSACIONES RECIENTES:
+        PROJECT CONTEXT:
+        - Industry: {business_context.get('industry', 'Not specified')}
+        - Stage: {business_context.get('stage', 'Initial')}
+        - Type: {business_context.get('business_type', 'Project')}
+        - Problem solving: {business_context.get('problem_solving', 'Not defined')}
+        - User plan: {user_plan}
+        
+        RECENT CONVERSATIONS:
         {self._format_recent_conversations(recent_conversations)}
         
-        DOCUMENTOS CREADOS:
+        DOCUMENTS CREATED:
         {user_context.get('documents_created', [])}
         
-        USUARIO PREGUNTA: {user_input}
+        USER ASKS: {user_input}
         
-        INSTRUCCIONES:
-        - Responde como mentor experimentado, no como AI
-        - Da consejos prácticos y accionables
-        - Si pide documentos (pitch deck, business plan), ofrécete a generarlos
-        - Sé honesto sobre los retos del emprendimiento
-        - Usa ejemplos reales cuando sea apropiado
-        - Ajusta tu respuesta al nivel (idea vs startup real)
-        - Responde en el mismo idioma que el usuario
-        - Longitud: 100-800 palabras según la complejidad
+        INSTRUCTIONS:
+        - {language_instruction}
+        - Respond as an experienced mentor, not as AI
+        - Give practical and actionable advice
+        - If they ask for documents (pitch deck, business plan), offer to generate them
+        - Be honest about entrepreneurship challenges
+        - Use real examples when appropriate
+        - Adjust your response to their level (idea vs real startup)
+        - Length: 100-800 words depending on complexity
         
-        Si el plan es 'free' y necesita features avanzadas, menciona los benefits del upgrade de forma natural.
+        If plan is 'free' and they need advanced features, naturally mention upgrade benefits.
         
-        Responde de forma directa, práctica y útil:
+        Respond directly, practically, and helpfully:
         """
         
         return prompt
 
-def _format_recent_conversations(self, conversations):
+
+ def _format_recent_conversations(self, conversations):
         """Formatea conversaciones recientes para contexto"""
         if not conversations:
-            return "No hay conversaciones previas"
+            return "No previous conversations"
         
         formatted = []
         for conv in conversations[-3:]:  # Últimas 3
-            formatted.append(f"- Usuario dijo: {conv.get('user_said', '')}")
-            formatted.append(f"- Asistente respondió: {conv.get('assistant_responded', '')}")
+            formatted.append(f"- User said: {conv.get('user_said', '')}")
+            formatted.append(f"- Assistant responded: {conv.get('assistant_responded', '')}")
         
         return '\n'.join(formatted)
 
@@ -1759,89 +1798,6 @@ def chat_with_bot(user):
             }), 402
             
         # PREPARAR CONTEXTO COMPLETO
-    def get_enhanced_context_for_chat(user, session_id, project_id, data):
-    """Obtiene contexto mejorado para el chat"""
-    
-    # Obtener contexto del proyecto
-    project_context = get_project_context_for_chat(user['id'], project_id)
-    
-    # Contexto base
-    enhanced_context = {
-        'user_id': user['id'],
-        'user_plan': user['subscription_plan'],
-        'session_id': session_id,
-        'project_id': project_id,
-        'user_credits_before': get_user_credits(user['id']),
-        **data.get('context', {}),
-        **project_context
-    }
-    
-    return enhanced_context
-        
-        # PROCESAR CON BOT_MANAGER
-        response = bot_manager.process_user_request(
-            data['message'],
-            enhanced_context,
-            user['id']
-        )
-        
-        if 'error' in response:
-            return jsonify(response), 400
-        
-        # GUARDAR INTERACCIÓN EN NEURAL_INTERACTIONS
-        try:
-            with engine.connect() as conn:
-                conn.execute(
-                    text("""
-                        INSERT INTO neural_interactions (
-                            id, user_id, bot_used, user_input, bot_output, 
-                            credits_charged, context_data, session_id, project_id, created_at
-                        ) VALUES (
-                            :id, :user_id, :bot_used, :user_input, :bot_output,
-                            :credits_charged, :context_data, :session_id, :project_id, NOW()
-                        )
-                    """),
-                    {
-                        "id": str(uuid.uuid4()),
-                        "user_id": user['id'],
-                        "bot_used": response.get('bot', 'basic_bot'),
-                        "user_input": data['message'],
-                        "bot_output": response.get('response', ''),
-                        "credits_charged": response.get('credits_charged_by_bot', credits_required),
-                        "context_data": json.dumps(enhanced_context),
-                        "session_id": session_id,
-                        "project_id": project_id
-                    }
-                )
-                conn.commit()
-                print(f"✅ Interaction saved: session={session_id}, project={project_id}")
-        except Exception as e:
-            print(f"⚠️ Warning: Could not save interaction: {e}")
-        
-        # CALCULAR CRÉDITOS FINALES
-        user_credits_after = get_user_credits(user['id'])
-        credits_actually_used = user_credits_before - user_credits_after
-        
-        return jsonify({
-            'success': True,
-            'session_id': session_id,
-            'project_id': project_id,
-            'message_id': str(uuid.uuid4()),
-            'credits_before': user_credits_before,
-            'credits_used': credits_actually_used,
-            'credits_remaining': user_credits_after,
-            'timestamp': datetime.now().isoformat(),
-            **response
-        })
-        
-    except Exception as e:
-        print(f"❌ Error in chat_with_bot: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({
-            'error': f'Could not process message: {str(e)}',
-            'timestamp': datetime.now().isoformat()
-        }), 500
 
 @app.route('/chat/history', methods=['GET'])
 @require_auth
