@@ -732,8 +732,9 @@ class BotManager:
             - Industria: {user_context.get('industry', 'No especificada')}
             - Etapa: {user_context.get('stage', 'No especificada')}
             
-            Responde de forma útil, práctica y accionable en español.
-            Máximo 300 palabras.
+            Responde de forma útil, práctica y accionable en el mismo idioma que usa el usuario.
+            Si escriben en inglés, responde en inglés. Si escriben en español, responde en español. Si es en francés, responde en francés. Cualquier idioma.
+            Responde de forma útil, práctica y accionable en el mismo idioma que usa el usuario, ajustando la longitud entre 50-1000 palabras según la complejidad/input/prompt de la pregunta del usuario.
             """
             
             model = genai.GenerativeModel(MODEL_NAME)
