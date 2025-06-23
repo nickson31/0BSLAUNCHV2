@@ -1304,7 +1304,7 @@ def chat_with_bot(user):
             'project_id': project_id,
             'project_name': project_result[1] if project_result[1] else 'Mi Proyecto',
             'project_description': project_result[2] if project_result[2] else '',
-            'project_data': json.loads(project_result[3]) if project_result[3] else {}
+            'project_data': project_result[3] if isinstance(project_result[3], dict) else (json.loads(project_result[3]) if project_result[3] else {})
         }
         
         # VERIFICAR CRÉDITOS
