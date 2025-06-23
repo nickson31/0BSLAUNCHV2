@@ -1603,21 +1603,19 @@ def handle_projects(user):
 @require_auth
 def get_recent_chats(user):
     """
-    Obtiene los chats recientes del usuario
+    Obtiene los chats recientes del usuario - SQL ARREGLADO
     
     QUERY PARAMETERS:
     - limit: número de chats (default: 10, max: 50)
-    
-    REQUEST: GET /chat/recent?limit=20
     """
     try:
         limit = min(int(request.args.get('limit', 10)), 50)  # Max 50 chats
         
         with engine.connect() as conn:
-            # Obtener conversaciones agrupadas por session_id
+            # ✅ SQL ARREGLADO - Convertir ambos a TEXT
             result = conn.execute(text("""
                 SELECT 
-                    COALESCE(session_id, id::text) as session_id,
+                    COALESCE(session_id::text, id::text) as session_id,
                     MIN(created_at) as started_at,
                     MAX(created_at) as last_message_at,
                     COUNT(*) as message_count,
@@ -1625,7 +1623,7 @@ def get_recent_chats(user):
                     (array_agg(bot_used ORDER BY created_at DESC))[1] as last_bot_used
                 FROM neural_interactions 
                 WHERE user_id = :user_id 
-                GROUP BY COALESCE(session_id, id::text)
+                GROUP BY COALESCE(session_id::text, id::text)
                 ORDER BY MAX(created_at) DESC
                 LIMIT :limit
             """), {"user_id": user['id'], "limit": limit}).fetchall()
@@ -1667,7 +1665,7 @@ def get_chat_messages(user, session_id):
                        context_data, created_at
                 FROM neural_interactions
                 WHERE user_id = :user_id 
-                AND (session_id = :session_id OR id::text = :session_id)
+                AND (session_id::text = :session_id OR id::text = :session_id)
                 ORDER BY created_at ASC
             """), {
                 "user_id": user['id'],
