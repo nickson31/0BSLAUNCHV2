@@ -2844,7 +2844,7 @@ Want me to find specific employees from any of these funds?"""
                         'investors_found': len(investors_found),
                         'investors_saved': saved_count,
                         'search_query': user_message,
-                        'investors_preview': investors_found[:6]  # Primeros 3 para el frontend
+                        'investors_preview': investors_found  # Primeros 3 para el frontend
                     })
                     
                 except Exception as search_error:
