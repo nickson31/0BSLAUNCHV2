@@ -3934,6 +3934,50 @@ def get_usage_analytics(user):
         print(f"❌ Error getting analytics: {e}")
         return jsonify({'error': 'Could not get analytics'}), 500
 
+def ml_investor_search(query, user_preferences, max_results=20):
+    """
+    Función principal de búsqueda ML de inversores - SIEMPRE 20 RESULTADOS
+    """
+    try:
+        # Crear instancia del motor de búsqueda
+        search_engine = InvestorSearchSimple(engine)
+        
+        # Ejecutar búsqueda (ya está limitado a 20 en la clase)
+        return search_engine.buscar_inversores(query)
+        
+    except Exception as e:
+        print(f"❌ Error en ml_investor_search: {e}")
+        return {
+            "error": f"Search failed: {str(e)}",
+            "success": False
+        }
+
+def require_plan(required_plan):
+    """
+    Decorator para verificar que el usuario tiene el plan requerido
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(user, *args, **kwargs):
+            user_plan = user.get('plan', 'free')
+            
+            # Jerarquía de planes: free < growth < pro
+            plan_hierarchy = {'free': 1, 'growth': 2, 'pro': 3}
+            
+            user_level = plan_hierarchy.get(user_plan, 1)
+            required_level = plan_hierarchy.get(required_plan, 1)
+            
+            if user_level < required_level:
+                return jsonify({
+                    'error': 'plan_upgrade_required',
+                    'current_plan': user_plan,
+                    'required_plan': required_plan,
+                    'message': f'Este feature requiere plan {required_plan}'
+                }), 403
+            
+            return f(user, *args, **kwargs)
+        return decorated_function
+    return decorator
 # ==============================================================================
 #           MAIN
 # ==============================================================================
