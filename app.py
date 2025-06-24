@@ -1626,73 +1626,73 @@ class InvestorSearchSimple:
             return {"error": f"Búsqueda falló: {str(e)}"}
     
     def _cargar_inversores(self):
-    """Carga inversores con manejo robusto de errores"""
-    try:
-        # Probar diferentes variaciones del nombre de tabla
-        posibles_queries = [
-            """
-            SELECT 
-                id,
-                "Company_Name" as nombre,
-                "Company_Description" as descripcion,
-                "Company_Location" as ubicacion,
-                "Investing_Stage" as etapas,
-                "Investment_Categories" as categorias,
-                "Company_Linkedin" as linkedin
-            FROM investors
-            WHERE "Company_Name" IS NOT NULL 
-            AND "Company_Name" != ''
-            LIMIT 1000
-            """,
-            """
-            SELECT 
-                id,
-                company_name as nombre,
-                company_description as descripcion,
-                company_location as ubicacion,
-                investing_stage as etapas,
-                investment_categories as categorias,
-                company_linkedin as linkedin
-            FROM investors
-            WHERE company_name IS NOT NULL 
-            AND company_name != ''
-            LIMIT 1000
-            """
-        ]
-        
-        df = None
-        for i, query in enumerate(posibles_queries):
-            try:
-                print(f"🔍 Probando query {i+1}/2...")
-                df = pd.read_sql(query, self.engine)
-                if not df.empty:
-                    print(f"✅ Query {i+1} exitoso: {len(df)} filas")
-                    break
-            except Exception as e:
-                print(f"⚠️ Query {i+1} falló: {e}")
-                continue
-        
-        if df is None or df.empty:
-            print("❌ Ningún query funcionó")
+        """Carga inversores con manejo robusto de errores"""
+        try:
+            # Probar diferentes variaciones del nombre de tabla
+            posibles_queries = [
+                """
+                SELECT 
+                    id,
+                    "Company_Name" as nombre,
+                    "Company_Description" as descripcion,
+                    "Company_Location" as ubicacion,
+                    "Investing_Stage" as etapas,
+                    "Investment_Categories" as categorias,
+                    "Company_Linkedin" as linkedin
+                FROM investors
+                WHERE "Company_Name" IS NOT NULL 
+                AND "Company_Name" != ''
+                LIMIT 1000
+                """,
+                """
+                SELECT 
+                    id,
+                    company_name as nombre,
+                    company_description as descripcion,
+                    company_location as ubicacion,
+                    investing_stage as etapas,
+                    investment_categories as categorias,
+                    company_linkedin as linkedin
+                FROM investors
+                WHERE company_name IS NOT NULL 
+                AND company_name != ''
+                LIMIT 1000
+                """
+            ]
+            
+            df = None
+            for i, query in enumerate(posibles_queries):
+                try:
+                    print(f"🔍 Probando query {i+1}/2...")
+                    df = pd.read_sql(query, self.engine)
+                    if not df.empty:
+                        print(f"✅ Query {i+1} exitoso: {len(df)} filas")
+                        break
+                except Exception as e:
+                    print(f"⚠️ Query {i+1} falló: {e}")
+                    continue
+            
+            if df is None or df.empty:
+                print("❌ Ningún query funcionó")
+                return pd.DataFrame()
+            
+            # Rellenar valores vacíos
+            df = df.fillna('')
+            
+            # Crear texto combinado para búsqueda
+            df['texto_busqueda'] = (
+                df['nombre'].astype(str) + ' ' +
+                df['descripcion'].astype(str) + ' ' +
+                df['ubicacion'].astype(str) + ' ' +
+                df['etapas'].astype(str) + ' ' +
+                df['categorias'].astype(str)
+            ).str.lower()
+            
+            return df
+            
+        except Exception as e:
+            print(f"❌ Error cargando inversores: {e}")
             return pd.DataFrame()
-        
-        # Rellenar valores vacíos
-        df = df.fillna('')
-        
-        # Crear texto combinado para búsqueda
-        df['texto_busqueda'] = (
-            df['nombre'].astype(str) + ' ' +
-            df['descripcion'].astype(str) + ' ' +
-            df['ubicacion'].astype(str) + ' ' +
-            df['etapas'].astype(str) + ' ' +
-            df['categorias'].astype(str)
-        ).str.lower()
-        
-        return df
-        
-    except Exception as e:
-        print(f"❌ Error cargando inversores: {e}")
-        return pd.DataFrame()
                      
     
     def _analizar_busqueda(self, query):
