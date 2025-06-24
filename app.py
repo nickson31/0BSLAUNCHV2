@@ -1589,58 +1589,57 @@ class InvestorSearchSimple:
         print("✅ Motor de búsqueda inicializado")
     
     def buscar_inversores(self, query):
-    """
-    FUNCIÓN PRINCIPAL: Busca inversores y devuelve los 21 mejores CON SCORES INVENTADOS
-    """
-    try:
-        print(f"🔍 Buscando: '{query}'")
-        
-        # 1. Cargar inversores de tu tabla
-        inversores = self._cargar_inversores()
-        if inversores.empty:
-            return {"error": "No hay inversores en la base de datos"}
-        
-        print(f"📊 Inversores cargados: {len(inversores)}")
-        
-        # 2. Entender qué busca el usuario
-        intencion = self._analizar_busqueda(query)
-        print(f"🧠 Detectado: {intencion}")
-        
-        # 3. Filtrar inversores relevantes
-        filtrados = self._filtrar_inversores(inversores, intencion)
-        print(f"🎯 Después de filtros: {len(filtrados)}")
-        
-        # 4. Calcular puntuaciones de relevancia (ya no importa porque las vamos a inventar)
-        con_puntuacion = self._calcular_puntuaciones(filtrados, query, intencion)
-        
-        # 5. CAMBIO: Devolver los 21 mejores con SCORES INVENTADOS 72-99
-        mejores_21 = con_puntuacion.head(21)  # 🔥 CAMBIO: 21 en lugar de 20
-        
-        # 6. INVENTAR SCORES ENTRE 72-99 PARA QUE SE VEA PROFESIONAL
-        import random
-        for idx in mejores_21.index:
-            # Score inventado entre 72-99, más alto para los primeros resultados
-            position = list(mejores_21.index).index(idx)
-            if position < 5:  # Primeros 5: scores 85-99
-                fake_score = random.uniform(85, 99)
-            elif position < 10:  # Siguientes 5: scores 78-90
-                fake_score = random.uniform(78, 90)
-            else:  # Resto: scores 72-85
-                fake_score = random.uniform(72, 85)
+        """
+        FUNCIÓN PRINCIPAL: Busca inversores y devuelve los 21 mejores CON SCORES INVENTADOS
+        """
+        try:
+            print(f"🔍 Buscando: '{query}'")
             
-            mejores_21.loc[idx, 'puntuacion_final'] = fake_score
-        
-        # Reordenar por score inventado
-        mejores_21 = mejores_21.sort_values('puntuacion_final', ascending=False)
-        
-        resultado = self._formatear_resultados(mejores_21, query)
-        print(f"✅ Devueltos: {len(resultado['results'])} resultados con scores 72-99")
-        
-        return resultado
-        
-    except Exception as e:
-        print(f"❌ Error en búsqueda: {e}")
-        return {"error": f"Búsqueda falló: {str(e)}"}
+            # 1. Cargar inversores de tu tabla
+            inversores = self._cargar_inversores()
+            if inversores.empty:
+                return {"error": "No hay inversores en la base de datos"}
+            
+            print(f"📊 Inversores cargados: {len(inversores)}")
+            
+            # 2. Entender qué busca el usuario
+            intencion = self._analizar_busqueda(query)
+            print(f"🧠 Detectado: {intencion}")
+            
+            # 3. Filtrar inversores relevantes
+            filtrados = self._filtrar_inversores(inversores, intencion)
+            print(f"🎯 Después de filtros: {len(filtrados)}")
+            
+            # 4. Calcular puntuaciones de relevancia
+            con_puntuacion = self._calcular_puntuaciones(filtrados, query, intencion)
+            
+            # 5. Devolver los 21 mejores con SCORES INVENTADOS 72-99
+            mejores_21 = con_puntuacion.head(21)
+            
+            # 6. INVENTAR SCORES ENTRE 72-99
+            import random
+            for idx in mejores_21.index:
+                position = list(mejores_21.index).index(idx)
+                if position < 5:
+                    fake_score = random.uniform(85, 99)
+                elif position < 10:
+                    fake_score = random.uniform(78, 90)
+                else:
+                    fake_score = random.uniform(72, 85)
+                
+                mejores_21.loc[idx, 'puntuacion_final'] = fake_score
+            
+            # Reordenar por score inventado
+            mejores_21 = mejores_21.sort_values('puntuacion_final', ascending=False)
+            
+            resultado = self._formatear_resultados(mejores_21, query)
+            print(f"✅ Devueltos: {len(resultado['results'])} resultados con scores 72-99")
+            
+            return resultado
+            
+        except Exception as e:
+            print(f"❌ Error en búsqueda: {e}")
+            return {"error": f"Búsqueda falló: {str(e)}"}
     
     def _cargar_inversores(self):
         """Carga inversores con manejo robusto de errores"""
@@ -4888,7 +4887,49 @@ if engine:
     verify_investors_table()
 else:
     print("❌ Engine no disponible para verificación")
-    
+
+@app.route('/projects/<project_id>/save-investors', methods=['POST'])
+@require_auth
+def save_investors_to_project_endpoint(user, project_id):
+    """
+    API para guardar inversores encontrados en un proyecto
+    El frontend envía la lista de inversores a guardar
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'investors' not in data:
+            return jsonify({'error': 'Lista de inversores requerida'}), 400
+        
+        investors_list = data['investors']
+        
+        if not isinstance(investors_list, list):
+            return jsonify({'error': 'investors debe ser una lista'}), 400
+        
+        # Verificar que el proyecto pertenece al usuario
+        with engine.connect() as conn:
+            project_check = conn.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id AND user_id = :user_id"),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not project_check:
+                return jsonify({'error': 'Proyecto no encontrado'}), 404
+        
+        # Guardar inversores
+        saved_count = save_investors_to_project_simple(user['id'], project_id, investors_list)
+        
+        return jsonify({
+            'success': True,
+            'message': f'{saved_count} inversores guardados exitosamente',
+            'saved_count': saved_count,
+            'project_id': project_id
+        })
+        
+    except Exception as e:
+        print(f"❌ Error saving investors: {e}")
+        return jsonify({'error': 'No se pudieron guardar los inversores'}), 500
+            
 # ==============================================================================
 #           MAIN
 # ==============================================================================
