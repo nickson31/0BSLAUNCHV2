@@ -287,15 +287,24 @@ def require_plan(required_plan):
 
 def ml_investor_search(query, user_preferences, max_results=20):
     """
-    Función principal de búsqueda ML de inversores - SIEMPRE 20 RESULTADOS
+    Función principal de búsqueda ML de inversores - VERSIÓN CORREGIDA
     """
     try:
         print(f"🔍 Iniciando búsqueda ML: '{query}'")
         
+        # Verificar que engine esté disponible
+        if not engine:
+            print("❌ Engine de base de datos no disponible")
+            return {
+                "error": "Database connection not available",
+                "success": False,
+                "query": query
+            }
+        
         # Crear instancia del motor de búsqueda
         search_engine = InvestorSearchSimple(engine)
         
-        # Ejecutar búsqueda (ya está limitado a 20 en la clase)
+        # Ejecutar búsqueda
         resultado = search_engine.buscar_inversores(query)
         
         print(f"✅ Búsqueda completada: {len(resultado.get('results', []))} resultados")
@@ -308,7 +317,8 @@ def ml_investor_search(query, user_preferences, max_results=20):
         return {
             "error": f"Search failed: {str(e)}",
             "success": False,
-            "query": query
+            "query": query,
+            "details": str(e)
         }
         
 def require_auth(f):
@@ -926,7 +936,7 @@ def get_neural_memory(user_id):
 
 def extract_and_update_project_memory(user_id, project_id, user_input, bot_response):
     """
-    Extrae información clave del chat y actualiza la memoria del proyecto
+    Versión corregida que maneja JSON correctamente
     """
     try:
         # Obtener memoria actual del proyecto
@@ -942,15 +952,24 @@ def extract_and_update_project_memory(user_id, project_id, user_input, bot_respo
             if not result:
                 return False
             
-            current_memory = json.loads(result[0]) if result[0] else {}
+            # Manejar JSON correctamente
+            try:
+                if result[0] is None:
+                    current_memory = {}
+                elif isinstance(result[0], str):
+                    current_memory = json.loads(result[0])
+                elif isinstance(result[0], dict):
+                    current_memory = result[0]
+                else:
+                    current_memory = {}
+            except (json.JSONDecodeError, TypeError):
+                current_memory = {}
         
-        # Extraer información del input del usuario
-        extracted_info = extract_business_info(user_input + " " + bot_response)
+        # Actualizar memoria (versión simple)
+        updated_memory = current_memory.copy()
+        updated_memory["last_updated"] = datetime.now().isoformat()
         
-        # Actualizar memoria con nueva información
-        updated_memory = merge_memory_data(current_memory, extracted_info)
-        
-        # Guardar memoria actualizada
+        # Guardar memoria actualizada - CONVERTIR A STRING JSON
         with engine.connect() as conn:
             conn.execute(
                 text("""
@@ -959,7 +978,7 @@ def extract_and_update_project_memory(user_id, project_id, user_input, bot_respo
                     WHERE id = :project_id AND user_id = :user_id
                 """),
                 {
-                    "memory_data": json.dumps(updated_memory),
+                    "memory_data": json.dumps(updated_memory),  # CONVERTIR A STRING
                     "project_id": project_id,
                     "user_id": user_id
                 }
@@ -972,7 +991,7 @@ def extract_and_update_project_memory(user_id, project_id, user_input, bot_respo
     except Exception as e:
         print(f"❌ Error updating project memory: {e}")
         return False
-
+        
 def extract_business_info(text):
     """
     Extrae información de negocio del texto usando Gemini - MULTIIDIOMA
@@ -1324,45 +1343,55 @@ def generate_context_summary(business_context, recent_chats):
         return "Error generando resumen de contexto"
 
 def detect_investor_search_intent(user_message, user_language='en'):
-    """Detecta si el usuario quiere buscar inversores usando Gemini. te daré unos ejemplos, pero tendrás que detectarlo tú mismo con tu inteligencia y criterio, sólo si lo pide explícitamente - MULTIIDIOMA"""
+    """Detecta si el usuario quiere buscar inversores ESPECÍFICOS usando Gemini - VERSIÓN MEJORADA"""
     try:
         detection_prompts = {
             'es': f"""
-            Analiza si el usuario quiere buscar inversores en este mensaje:
+            Analiza si el usuario quiere BUSCAR INVERSORES ESPECÍFICOS (no solo consejos):
             "{user_message}"
             
-            Responde SOLO con 'true' o 'false'.
-            Ejemplos que SÍ son búsqueda de inversores:
-            - "Quiero buscar inversores"
-            - "Necesito encontrar VCs"
-            - "Busca fondos de inversión"
-            - "Muéstrame inversores para fintech"
-            - "Encuentra inversores seed"
+            Responde SOLO 'true' o 'false'.
             
-            Ejemplos que NO son búsqueda:
-            - "Cómo hacer un pitch para inversores"
+            ✅ SÍ es búsqueda de inversores (responde 'true'):
+            - "Buscar inversores para fintech"
+            - "Encuentrame VCs de Madrid" 
+            - "Necesito lista de fondos"
+            - "Mostrar inversores seed"
+            - "Tabla de inversores"
+            - "Ver inversores disponibles"
+            - "Busca fondos de inversión"
+            - "Quiero contactos de VCs"
+            
+            ❌ NO es búsqueda (responde 'false'):
+            - "Cómo convencer a inversores"
             - "Qué buscan los inversores"
             - "Estrategia para inversores"
-            - "Prepara mi pitch deck"
+            - "Consejos para pitch"
+            - "Preparar reunión con VC"
             """,
             
             'en': f"""
-            Analyze if the user wants to search for investors in this message:
+            Analyze if the user wants to SEARCH FOR SPECIFIC INVESTORS (not just advice):
             "{user_message}"
             
             Respond ONLY with 'true' or 'false'.
-            Examples that ARE investor search:
-            - "I want to find investors"
-            - "Search for VCs"
-            - "Show me fintech investors"
-            - "Find seed funds"
-            - "Look for angel investors"
             
-            Examples that are NOT search:
-            - "How to pitch to investors"
-            - "What do investors look for"
+            ✅ YES it's investor search (respond 'true'):
+            - "Search for fintech investors"
+            - "Find VCs in London"
+            - "Need list of funds"
+            - "Show seed investors"
+            - "Investor table"
+            - "See available investors"
+            - "Search investment funds"
+            - "Want VC contacts"
+            
+            ❌ NO it's not search (respond 'false'):
+            - "How to convince investors"
+            - "What investors look for"
             - "Investor strategy"
-            - "Prepare my pitch deck"
+            - "Pitch advice"
+            - "Prepare VC meeting"
             """
         }
         
@@ -1372,24 +1401,36 @@ def detect_investor_search_intent(user_message, user_language='en'):
         response = model.generate_content(
             prompt,
             generation_config={
-                "temperature": 0.1,
+                "temperature": 0.1,  # Muy bajo para respuestas consistentes
                 "max_output_tokens": 10,
             }
         )
         
-        return response.text.strip().lower() == 'true'
+        result = response.text.strip().lower() == 'true'
+        
+        print(f"🤖 Intent detection: '{user_message[:50]}...' → {result}")
+        return result
         
     except Exception as e:
         print(f"❌ Error detecting investor search intent: {e}")
-        # Fallback: buscar keywords
-        search_keywords = ['buscar', 'encontrar', 'search', 'find', 'muéstrame', 'show me', 'look for']
-        investor_keywords = ['inversor', 'investor', 'vc', 'fondo', 'fund', 'capital', 'angel']
+        # Fallback: buscar keywords específicas de BÚSQUEDA
+        search_keywords = [
+            'buscar', 'encontrar', 'search', 'find', 'lista', 'list', 
+            'tabla', 'table', 'mostrar', 'show', 'ver', 'see',
+            'contactos', 'contacts', 'directorio', 'directory'
+        ]
+        investor_keywords = [
+            'inversor', 'investor', 'vc', 'fondo', 'fund', 'capital', 'angel'
+        ]
         
         message_lower = user_message.lower()
         has_search = any(keyword in message_lower for keyword in search_keywords)
         has_investor = any(keyword in message_lower for keyword in investor_keywords)
         
-        return has_search and has_investor
+        # Solo si tiene AMBOS: palabras de búsqueda + investor
+        fallback_result = has_search and has_investor
+        print(f"🔄 Fallback detection: {fallback_result}")
+        return fallback_result
 
 # ==============================================================================
 #           BOT SYSTEM
@@ -1585,9 +1626,11 @@ class InvestorSearchSimple:
             return {"error": f"Búsqueda falló: {str(e)}"}
     
     def _cargar_inversores(self):
-        """Carga inversores de TU tabla existente en Supabase"""
-        try:
-            query = """
+    """Carga inversores con manejo robusto de errores"""
+    try:
+        # Probar diferentes variaciones del nombre de tabla
+        posibles_queries = [
+            """
             SELECT 
                 id,
                 "Company_Name" as nombre,
@@ -1599,28 +1642,58 @@ class InvestorSearchSimple:
             FROM investors
             WHERE "Company_Name" IS NOT NULL 
             AND "Company_Name" != ''
-            LIMIT 3000
+            LIMIT 1000
+            """,
             """
-            
-            df = pd.read_sql(query, self.engine)
-            
-            # Rellenar valores vacíos
-            df = df.fillna('')
-            
-            # Crear texto combinado para búsqueda
-            df['texto_busqueda'] = (
-                df['nombre'].astype(str) + ' ' +
-                df['descripcion'].astype(str) + ' ' +
-                df['ubicacion'].astype(str) + ' ' +
-                df['etapas'].astype(str) + ' ' +
-                df['categorias'].astype(str)
-            ).str.lower()
-            
-            return df
-            
-        except Exception as e:
-            print(f"❌ Error cargando inversores: {e}")
+            SELECT 
+                id,
+                company_name as nombre,
+                company_description as descripcion,
+                company_location as ubicacion,
+                investing_stage as etapas,
+                investment_categories as categorias,
+                company_linkedin as linkedin
+            FROM investors
+            WHERE company_name IS NOT NULL 
+            AND company_name != ''
+            LIMIT 1000
+            """
+        ]
+        
+        df = None
+        for i, query in enumerate(posibles_queries):
+            try:
+                print(f"🔍 Probando query {i+1}/2...")
+                df = pd.read_sql(query, self.engine)
+                if not df.empty:
+                    print(f"✅ Query {i+1} exitoso: {len(df)} filas")
+                    break
+            except Exception as e:
+                print(f"⚠️ Query {i+1} falló: {e}")
+                continue
+        
+        if df is None or df.empty:
+            print("❌ Ningún query funcionó")
             return pd.DataFrame()
+        
+        # Rellenar valores vacíos
+        df = df.fillna('')
+        
+        # Crear texto combinado para búsqueda
+        df['texto_busqueda'] = (
+            df['nombre'].astype(str) + ' ' +
+            df['descripcion'].astype(str) + ' ' +
+            df['ubicacion'].astype(str) + ' ' +
+            df['etapas'].astype(str) + ' ' +
+            df['categorias'].astype(str)
+        ).str.lower()
+        
+        return df
+        
+    except Exception as e:
+        print(f"❌ Error cargando inversores: {e}")
+        return pd.DataFrame()
+                     
     
     def _analizar_busqueda(self, query):
         """Usa Gemini para entender qué busca el usuario"""
@@ -2408,7 +2481,111 @@ def chat_with_bot(user):
             user_message, 
             enhanced_context.get('user_language', 'en')
         )
+
+        # Si detecta búsqueda de inversores, dar respuesta específica
+if wants_investor_search:
+    print(f"🎯 Usuario quiere buscar inversores!")
+    
+    # Verificar si tiene plan adecuado
+    if user.get('plan', 'free') == 'free':
+        # Sugerir upgrade con ejemplo
+        upgrade_messages = {
+            'es': f"""
+            ¡Perfecto! Quieres buscar inversores específicos. 
+
+            **Para buscar inversores necesitas el plan Growth:**
+            
+            🔍 **Con Growth Plan obtienes:**
+            - Búsqueda ML de 20+ inversores específicos
+            - Filtros por industria, etapa, ubicación
+            - 100,000 créditos de lanzamiento
+            - Solo €20/mes
+            
+            **Ejemplo de búsqueda:**
+            - "fintech seed Madrid" → 15 inversores específicos
+            - "healthtech Series A London" → 12 fondos relevantes
+            
+            ¿Quieres que upgrade tu plan para buscar inversores ahora?
+            """,
+            'en': f"""
+            Perfect! You want to search for specific investors.
+
+            **To search investors you need Growth Plan:**
+            
+            🔍 **With Growth Plan you get:**
+            - ML search of 20+ specific investors  
+            - Filters by industry, stage, location
+            - 100,000 launch credits
+            - Only €20/month
+            
+            **Search example:**
+            - "fintech seed Madrid" → 15 specific investors
+            - "healthtech Series A London" → 12 relevant funds
+            
+            Want to upgrade your plan to search investors now?
+            """
+        }
         
+        # Usar el mensaje de upgrade en lugar de la respuesta normal del bot
+        final_response['response'] = upgrade_messages.get(detected_language, upgrade_messages['en'])
+        final_response['investor_search_detected'] = True
+        final_response['upgrade_required'] = True
+        
+    else:
+        # Tiene plan Growth/Pro - guiar a usar la búsqueda
+        search_messages = {
+            'es': f"""
+            ¡Perfecto! Tienes plan {user.get('plan')} - puedes buscar inversores.
+            
+            **¿Cómo buscar inversores?**
+            
+            1. **Ve a la sección "Buscar Inversores"** en el menú
+            2. **Escribe tu búsqueda específica**, por ejemplo:
+               - "fintech seed España" 
+               - "SaaS Series A Madrid"
+               - "healthtech angel investors London"
+            
+            3. **Obtén lista de 20 inversores específicos** con:
+               - Nombre del fondo
+               - Descripción
+               - Etapas de inversión  
+               - Categorías de inversión
+               - Ubicación
+               - LinkedIn
+            
+            **💡 Tip:** Cuanto más específica tu búsqueda, mejores resultados obtienes.
+            
+            ¿Quieres que te ayude a definir una búsqueda específica para tu startup?
+            """,
+            'en': f"""
+            Perfect! You have {user.get('plan')} plan - you can search investors.
+            
+            **How to search investors?**
+            
+            1. **Go to "Search Investors" section** in the menu
+            2. **Write your specific search**, for example:
+               - "fintech seed Spain"
+               - "SaaS Series A Madrid" 
+               - "healthtech angel investors London"
+            
+            3. **Get list of 20 specific investors** with:
+               - Fund name
+               - Description
+               - Investment stages
+               - Investment categories
+               - Location
+               - LinkedIn
+            
+            **💡 Tip:** The more specific your search, the better results you get.
+            
+            Want me to help you define a specific search for your startup?
+            """
+        }
+        
+        final_response['response'] = search_messages.get(detected_language, search_messages['en'])
+        final_response['investor_search_detected'] = True
+        final_response['can_search_now'] = True
+                
         # VERIFICAR CRÉDITOS
         user_credits_before = get_user_credits(user['id'])
         credits_required = CREDIT_COSTS.get('basic_bot', 5)
@@ -4280,7 +4457,47 @@ def get_employees_by_company_name(user, company_name):
             "error": "Could not get employees",
             "success": False
         }), 500
-                   
+
+def verify_investors_table():
+    """Función para verificar que la tabla de inversores existe y tiene datos"""
+    try:
+        print("🔍 Verificando tabla de inversores...")
+        
+        with engine.connect() as conn:
+            # Verificar si la tabla existe
+            table_check = conn.execute(text("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'investors'
+            """)).fetchone()
+            
+            if not table_check:
+                print("❌ Tabla 'investors' no existe")
+                return False
+            
+            print("✅ Tabla 'investors' existe")
+            
+            # Verificar contenido
+            count_result = conn.execute(text("SELECT COUNT(*) FROM investors")).scalar()
+            print(f"📊 Número de inversores en la tabla: {count_result}")
+            
+            if count_result == 0:
+                print("⚠️ La tabla está vacía")
+                return False
+            
+            return True
+            
+    except Exception as e:
+        print(f"❌ Error verificando tabla: {e}")
+        return False
+
+# Verificar tabla al iniciar
+if engine:
+    verify_investors_table()
+else:
+    print("❌ Engine no disponible para verificación")
+    
 # ==============================================================================
 #           MAIN
 # ==============================================================================
