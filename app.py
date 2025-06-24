@@ -1898,7 +1898,150 @@ class InvestorSearchSimple:
                 'error': 'Error formateando resultados',
                 'details': str(e)
             }
+def save_investors_to_project_simple(user_id, project_id, investors_data):
+    """
+    Guarda los 20 mejores inversores en project_saved_investors
+    """
+    try:
+        saved_count = 0
+        
+        with engine.connect() as conn:
+            for investor in investors_data:
+                investor_id = investor['investor_id']
+                
+                # Verificar si ya existe esta relación
+                existing = conn.execute(
+                    text("""
+                        SELECT 1 FROM project_saved_investors 
+                        WHERE project_id = :project_id AND investor_id = :investor_id
+                    """),
+                    {"project_id": project_id, "investor_id": investor_id}
+                ).fetchone()
+                
+                if not existing:
+                    # Insertar nueva relación
+                    conn.execute(
+                        text("""
+                            INSERT INTO project_saved_investors (project_id, investor_id, added_at) 
+                            VALUES (:project_id, :investor_id, NOW())
+                        """),
+                        {"project_id": project_id, "investor_id": investor_id}
+                    )
+                    saved_count += 1
+                    print(f"✅ Saved investor: {investor.get('company_name', investor_id)}")
+            
+            conn.commit()
+            
+        print(f"✅ Total investors saved: {saved_count}")
+        return saved_count
+        
+    except Exception as e:
+        print(f"❌ Error saving investors: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0
 
+def save_search_to_history_simple(user_id, query, results_count, credits_spent):
+    """
+    Guarda búsqueda en search_history para trackear lo que busca el usuario
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO search_history (
+                        id, user_id, search_type, query, results_count, 
+                        credits_spent, filters_used, created_at
+                    ) VALUES (
+                        :id, :user_id, 'investors', :query, :results_count,
+                        :credits_spent, :filters_used, NOW()
+                    )
+                """),
+                {
+                    "id": str(uuid.uuid4()),
+                    "user_id": user_id,
+                    "query": query,
+                    "results_count": results_count,
+                    "credits_spent": credits_spent,
+                    "filters_used": json.dumps({
+                        "executed_from": "chat",
+                        "auto_search": True,
+                        "max_results": 20
+                    })
+                }
+            )
+            conn.commit()
+            print(f"✅ Search saved to history: {query}")
+            
+    except Exception as e:
+        print(f"❌ Error saving search history: {e}")
+
+def create_investors_table_for_chat(investors, language='en'):
+    """
+    Crea tabla bonita de inversores para mostrar EN EL CHAT
+    """
+    try:
+        if not investors:
+            return "No investors to display"
+        
+        if language == 'es':
+            headers = ["#", "Fondo de Inversión", "Ubicación", "Etapas", "Categorías", "Score"]
+        else:
+            headers = ["#", "Investment Fund", "Location", "Stages", "Categories", "Score"]
+        
+        # Crear tabla markdown
+        table_lines = []
+        table_lines.append("| " + " | ".join(headers) + " |")
+        table_lines.append("|" + "|".join([":---:"] + ["---"] * (len(headers)-1)) + "|")
+        
+        for i, investor in enumerate(investors, 1):
+            # Truncar textos largos para que se vea bien en el chat
+            company_name = investor.get('company_name', 'N/A')
+            if len(company_name) > 25:
+                company_name = company_name[:22] + "..."
+                
+            location = investor.get('location', 'N/A')
+            if len(location) > 15:
+                location = location[:12] + "..."
+                
+            stages = investor.get('investing_stages', 'N/A')
+            if len(stages) > 15:
+                stages = stages[:12] + "..."
+                
+            categories = investor.get('investment_categories', 'N/A')
+            if len(categories) > 20:
+                categories = categories[:17] + "..."
+                
+            score = f"{investor.get('match_score', 0):.0f}%"
+            
+            row = [
+                f"**{i}**",
+                f"**{company_name}**",
+                location,
+                stages,
+                categories,
+                f"**{score}**"
+            ]
+            
+            table_lines.append("| " + " | ".join(row) + " |")
+            
+            # Solo mostrar primeros 10 en el chat
+            if i >= 10:
+                break
+        
+        # Si hay más de 10, agregar nota
+        if len(investors) > 10:
+            if language == 'es':
+                table_lines.append(f"\n*...y {len(investors) - 10} inversores más guardados en tu página de Inversores*")
+            else:
+                table_lines.append(f"\n*...and {len(investors) - 10} more investors saved to your Investors page*")
+        
+        return "\n".join(table_lines)
+        
+    except Exception as e:
+        print(f"❌ Error creating table: {e}")
+        return "Error creating investors table"
+                   
 # ==============================================================================
 #           ROUTES
 # ==============================================================================
@@ -2496,7 +2639,7 @@ def chat_with_bot(user):
             
             # Verificar si tiene plan adecuado
             if user.get('plan', 'free') == 'free':
-                # Sugerir upgrade con ejemplo
+                # Mensaje de upgrade
                 upgrade_messages = {
                     'es': """¡Perfecto! Quieres buscar inversores específicos. 
 
@@ -2507,10 +2650,6 @@ def chat_with_bot(user):
 - Filtros por industria, etapa, ubicación
 - 100,000 créditos de lanzamiento
 - Solo €20/mes
-
-**Ejemplo de búsqueda:**
-- "fintech seed Madrid" → 15 inversores específicos
-- "healthtech Series A London" → 12 fondos relevantes
 
 ¿Quieres que upgrade tu plan para buscar inversores ahora?""",
                     'en': """Perfect! You want to search for specific investors.
@@ -2523,14 +2662,9 @@ def chat_with_bot(user):
 - 100,000 launch credits
 - Only €20/month
 
-**Search example:**
-- "fintech seed Madrid" → 15 specific investors
-- "healthtech Series A London" → 12 relevant funds
-
 Want to upgrade your plan to search investors now?"""
                 }
                 
-                # RETORNAR RESPUESTA DE UPGRADE (sin cobrar créditos)
                 return jsonify({
                     'success': True,
                     'bot': 'interactive_mentor',
@@ -2541,74 +2675,185 @@ Want to upgrade your plan to search investors now?"""
                     'project_id': project_id,
                     'detected_language': detected_language,
                     'investor_search_detected': True,
-                    'upgrade_required': True,
-                    'upgrade_suggestion': {
-                        'message': 'Actualiza al plan Growth para buscar inversores' if detected_language == 'es' else 'Upgrade to Growth plan to search investors',
-                        'plan': 'growth',
-                        'benefits': ['Búsqueda de inversores con ML', '100k créditos de lanzamiento'] if detected_language == 'es' else ['ML-powered investor search', '100k launch credits']
-                    }
+                    'upgrade_required': True
                 })
                 
             else:
-                # Tiene plan Growth/Pro - guiar a usar la búsqueda
-                search_messages = {
-                    'es': f"""¡Perfecto! Tienes plan {user.get('plan')} - puedes buscar inversores.
-
-**¿Cómo buscar inversores?**
-
-1. **Ve a la sección "Buscar Inversores"** en el menú
-2. **Escribe tu búsqueda específica**, por ejemplo:
-   - "fintech seed España" 
-   - "SaaS Series A Madrid"
-   - "healthtech angel investors London"
-
-3. **Obtén lista de 20 inversores específicos** con:
-   - Nombre del fondo
-   - Descripción
-   - Etapas de inversión  
-   - Categorías de inversión
-   - Ubicación
-   - LinkedIn
-
-**💡 Tip:** Cuanto más específica tu búsqueda, mejores resultados obtienes.
-
-¿Quieres que te ayude a definir una búsqueda específica para tu startup?""",
-                    'en': f"""Perfect! You have {user.get('plan')} plan - you can search investors.
-
-**How to search investors?**
-
-1. **Go to "Search Investors" section** in the menu
-2. **Write your specific search**, for example:
-   - "fintech seed Spain"
-   - "SaaS Series A Madrid" 
-   - "healthtech angel investors London"
-
-3. **Get list of 20 specific investors** with:
-   - Fund name
-   - Description
-   - Investment stages
-   - Investment categories
-   - Location
-   - LinkedIn
-
-**💡 Tip:** The more specific your search, the better results you get.
-
-Want me to help you define a specific search for your startup?"""
-                }
+                # ¡TIENE PLAN GROWTH/PRO - EJECUTAR BÚSQUEDA AUTOMÁTICAMENTE!
+                print(f"🚀 Ejecutando búsqueda automática de inversores...")
                 
-                # RETORNAR RESPUESTA DE ORIENTACIÓN (sin cobrar créditos)
-                return jsonify({
-                    'success': True,
-                    'bot': 'interactive_mentor',
-                    'response': search_messages.get(detected_language, search_messages['en']),
-                    'credits_charged': 0,
-                    'credits_remaining': get_user_credits(user['id']),
-                    'session_id': session_id,
-                    'project_id': project_id,
-                    'detected_language': detected_language,
-                    'investor_search_detected': True,
-                    'can_search_now': True
-                })
+                try:
+                    # 1. EJECUTAR BÚSQUEDA ML (ya devuelve los 20 mejores por score)
+                    search_results = ml_investor_search(
+                        query=user_message,
+                        user_preferences={
+                            'user_id': user['id'],
+                            'project_id': project_id,
+                            'user_plan': user.get('plan')
+                        },
+                        max_results=20
+                    )
+                    
+                    if 'error' in search_results:
+                        return jsonify({
+                            'success': False,
+                            'error': 'Error en búsqueda de inversores',
+                            'details': search_results['error']
+                        }), 500
+                    
+                    investors_found = search_results.get('results', [])
+                    
+                    if not investors_found:
+                        no_results_messages = {
+                            'es': f"""🔍 Busqué inversores con: "{user_message}"
+
+❌ **No encontré inversores** que coincidan exactamente con tu búsqueda.
+
+💡 **Intenta con:**
+- Términos más generales: "fintech seed" en lugar de "fintech seed Madrid específico"
+- Diferentes etapas: "seed" "series A" "angel"
+- Otras ubicaciones: "Europe" "USA" "Spain"
+
+¿Quieres que pruebe con una búsqueda más amplia?""",
+                            'en': f"""🔍 Searched for investors with: "{user_message}"
+
+❌ **No investors found** matching your exact search.
+
+💡 **Try with:**
+- More general terms: "fintech seed" instead of "fintech seed Madrid specific"
+- Different stages: "seed" "series A" "angel"
+- Other locations: "Europe" "USA" "Spain"
+
+Want me to try a broader search?"""
+                        }
+                        
+                        return jsonify({
+                            'success': True,
+                            'bot': 'interactive_mentor',
+                            'response': no_results_messages.get(detected_language, no_results_messages['en']),
+                            'credits_charged': 0,
+                            'credits_remaining': get_user_credits(user['id']),
+                            'session_id': session_id,
+                            'project_id': project_id,
+                            'detected_language': detected_language,
+                            'investor_search_executed': True,
+                            'investors_found': 0
+                        })
+                    
+                    # 2. CALCULAR CRÉDITOS (10 por resultado - máximo 20 resultados)
+                    credits_cost = len(investors_found) * 10
+                    user_credits_before = get_user_credits(user['id'])
+                    
+                    if user_credits_before < credits_cost:
+                        return jsonify({
+                            'error': 'Créditos insuficientes',
+                            'required': credits_cost,
+                            'available': user_credits_before
+                        }), 402
+                    
+                    # 3. COBRAR CRÉDITOS
+                    credits_after = charge_credits(user['id'], credits_cost)
+                    if credits_after is None:
+                        return jsonify({'error': 'No se pudieron cobrar créditos'}), 500
+                    
+                    # 4. GUARDAR LOS 20 MEJORES INVERSORES EN PROJECT_SAVED_INVESTORS
+                    saved_count = save_investors_to_project_simple(
+                        user_id=user['id'],
+                        project_id=project_id,
+                        investors_data=investors_found
+                    )
+                    
+                    # 5. GUARDAR BÚSQUEDA EN HISTORIAL
+                    save_search_to_history_simple(
+                        user_id=user['id'],
+                        query=user_message,
+                        results_count=len(investors_found),
+                        credits_spent=credits_cost
+                    )
+                    
+                    # 6. CREAR TABLA PARA MOSTRAR EN EL CHAT (solo primeros 10)
+                    investors_table = create_investors_table_for_chat(
+                        investors_found[:10],  # Solo primeros 10 en chat
+                        detected_language
+                    )
+                    
+                    # 7. RESPUESTA CON TABLA EN EL CHAT
+                    success_messages = {
+                        'es': f"""🎯 **Encontré {len(investors_found)} inversores para tu startup:**
+
+{investors_table}
+
+✅ **{saved_count} inversores guardados** en tu página "Inversores" (sidebar)
+💰 **Créditos:** {credits_cost} cobrados | {credits_after} restantes
+📊 **Tip:** Ve a "Inversores" en el menú para ver todos los detalles y contactos
+
+¿Quieres que busque empleados específicos de alguno de estos fondos?""",
+                        
+                        'en': f"""🎯 **Found {len(investors_found)} investors for your startup:**
+
+{investors_table}
+
+✅ **{saved_count} investors saved** to your "Investors" page (sidebar)
+💰 **Credits:** {credits_cost} charged | {credits_after} remaining  
+📊 **Tip:** Go to "Investors" in menu to see all details and contacts
+
+Want me to find specific employees from any of these funds?"""
+                    }
+                    
+                    return jsonify({
+                        'success': True,
+                        'bot': 'interactive_mentor',
+                        'response': success_messages.get(detected_language, success_messages['en']),
+                        'credits_charged': credits_cost,
+                        'credits_remaining': credits_after,
+                        'session_id': session_id,
+                        'project_id': project_id,
+                        'detected_language': detected_language,
+                        'investor_search_executed': True,
+                        'investors_found': len(investors_found),
+                        'investors_saved': saved_count,
+                        'search_query': user_message,
+                        'investors_preview': investors_found[:3]  # Primeros 3 para el frontend
+                    })
+                    
+                except Exception as search_error:
+                    print(f"❌ Error ejecutando búsqueda: {search_error}")
+                    
+                    error_messages = {
+                        'es': f"""❌ **Error buscando inversores**
+
+Hubo un problema técnico ejecutando la búsqueda.
+
+💡 **Puedes intentar:**
+- Reformular tu búsqueda con términos más simples
+- Ir manualmente a la página "Buscar Inversores"
+- Contactar soporte si el problema persiste""",
+                        'en': f"""❌ **Error searching investors**
+
+There was a technical problem executing the search.
+
+💡 **You can try:**
+- Rephrase your search with simpler terms
+- Go manually to "Search Investors" page
+- Contact support if problem persists"""
+                    }
+                    
+                    return jsonify({
+                        'success': True,
+                        'bot': 'interactive_mentor', 
+                        'response': error_messages.get(detected_language, error_messages['en']),
+                        'credits_charged': 0,
+                        'credits_remaining': get_user_credits(user['id']),
+                        'session_id': session_id,
+                        'project_id': project_id,
+                        'detected_language': detected_language,
+                        'investor_search_executed': False,
+                        'error_occurred': True
+                    })
+
+        # ============================================================================
+        #   FLUJO NORMAL DEL BOT (cuando NO quiere buscar inversores)
+        # ============================================================================
         
         # ============================================================================
         #   FLUJO NORMAL DEL BOT (cuando NO quiere buscar inversores)
@@ -3051,7 +3296,113 @@ def get_all_users(user):
     except Exception as e:
         print(f"❌ Error getting users: {e}")
         return jsonify({'error': 'Could not get users'}), 500
+@app.route('/projects/<project_id>/saved-investors', methods=['GET'])
+@require_auth
+def get_saved_investors_for_sidebar(user, project_id):
+    """
+    Obtiene inversores guardados para mostrar en el sidebar de la página Investors
+    """
+    try:
+        # Verificar que el proyecto pertenece al usuario
+        with engine.connect() as conn:
+            project_check = conn.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id AND user_id = :user_id"),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not project_check:
+                return jsonify({'error': 'Project not found'}), 404
+            
+            # JOIN para obtener datos completos de inversores guardados
+            result = conn.execute(
+                text("""
+                    SELECT 
+                        psi.investor_id,
+                        psi.added_at,
+                        i."Company_Name",
+                        i."Company_Description", 
+                        i."Company_Location",
+                        i."Investing_Stage",
+                        i."Investment_Categories",
+                        i."Company_Linkedin",
+                        i."Company_Email",
+                        i."Company_Website"
+                    FROM project_saved_investors psi
+                    JOIN investors i ON psi.investor_id = i.id
+                    WHERE psi.project_id = :project_id
+                    ORDER BY psi.added_at DESC
+                """),
+                {"project_id": project_id}
+            ).fetchall()
+        
+        # Formatear resultados para el frontend
+        saved_investors = []
+        for row in result:
+            saved_investors.append({
+                'investor_id': str(row[0]),
+                'added_at': row[1].isoformat(),
+                'company_name': row[2] or '',
+                'description': row[3] or '',
+                'location': row[4] or '',
+                'investing_stages': row[5] or '',
+                'investment_categories': row[6] or '',
+                'linkedin_url': row[7] or '',
+                'email': row[8] or '',
+                'website': row[9] or ''
+            })
+        
+        return jsonify({
+            'success': True,
+            'project_id': project_id,
+            'saved_investors': saved_investors,
+            'total_count': len(saved_investors)
+        })
+        
+    except Exception as e:
+        print(f"❌ Error getting saved investors: {e}")
+        return jsonify({'error': 'Could not get saved investors'}), 500
 
+@app.route('/projects/<project_id>/search-history', methods=['GET'])
+@require_auth 
+def get_search_history_for_project(user, project_id):
+    """
+    Obtiene historial de búsquedas de inversores para mostrar en el sidebar
+    """
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT id, query, results_count, credits_spent, created_at, filters_used
+                    FROM search_history 
+                    WHERE user_id = :user_id 
+                    AND search_type = 'investors'
+                    ORDER BY created_at DESC
+                    LIMIT 20
+                """),
+                {"user_id": user['id']}
+            ).fetchall()
+        
+        searches = []
+        for row in result:
+            searches.append({
+                'id': str(row[0]),
+                'query': row[1],
+                'results_count': row[2],
+                'credits_spent': row[3],
+                'created_at': row[4].isoformat(),
+                'filters_used': json.loads(row[5]) if row[5] else {}
+            })
+        
+        return jsonify({
+            'success': True,
+            'search_history': searches,
+            'total_searches': len(searches)
+        })
+        
+    except Exception as e:
+        print(f"❌ Error getting search history: {e}")
+        return jsonify({'error': 'Could not get search history'}), 500
+                        
 # ==============================================================================
 #           ERROR HANDLERS
 # ==============================================================================
