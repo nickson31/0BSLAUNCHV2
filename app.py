@@ -1433,6 +1433,250 @@ def detect_investor_search_intent(user_message, user_language='en'):
         print(f"🔄 Fallback detection: {fallback_result}")
         return fallback_result
 
+def detect_document_generation_intent(user_message, user_language='en'):
+    """Detecta si el usuario quiere generar un documento profesional"""
+    try:
+        detection_prompts = {
+            'es': f"""
+            Analiza si el usuario quiere que GENERES un DOCUMENTO profesional:
+            "{user_message}"
+            
+            Responde SOLO 'true' o 'false'.
+            
+            ✅ SÍ quiere documento (responde 'true'):
+            - "Hazme un pitch deck"
+            - "Genera un plan de negocios"
+            - "Crea un plan de marketing"
+            - "Redacta el modelo financiero"
+            - "Necesito un executive summary"
+            - "Escribe un business plan"
+            
+            ❌ NO es documento (responde 'false'):
+            - "Qué incluye un pitch deck"
+            - "Consejos para pitch"
+            - "Cómo hacer un plan"
+            - Preguntas generales
+            """,
+            
+            'en': f"""
+            Analyze if user wants you to GENERATE a professional DOCUMENT:
+            "{user_message}"
+            
+            Respond ONLY 'true' or 'false'.
+            
+            ✅ YES wants document (respond 'true'):
+            - "Make me a pitch deck"
+            - "Generate a business plan"
+            - "Create a marketing plan"
+            - "Write the financial model"
+            - "I need an executive summary"
+            - "Draft a business plan"
+            
+            ❌ NO document (respond 'false'):
+            - "What's in a pitch deck"
+            - "Tips for pitching"
+            - "How to make a plan"
+            - General questions
+            """
+        }
+        
+        prompt = detection_prompts.get(user_language, detection_prompts['en'])
+        
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(
+            prompt,
+            generation_config={"temperature": 0.1, "max_output_tokens": 10}
+        )
+        
+        return response.text.strip().lower() == 'true'
+        
+    except Exception as e:
+        print(f"❌ Error detecting document intent: {e}")
+        return False
+
+def identify_document_type(message, language='en'):
+    """Identifica qué tipo de documento quiere el usuario"""
+    message_lower = message.lower()
+    
+    # Mapeo de palabras clave a tipos de documento
+    mappings = {
+        'pitch_deck': ['pitch', 'deck', 'investor deck', 'pitch deck'],
+        'business_plan': ['business plan', 'plan de negocios', 'plan de negocio'],
+        'marketing_plan': ['marketing', 'plan de marketing', 'growth plan'],
+        'financial_model': ['financial', 'modelo financiero', 'proyecciones', 'projections']
+    }
+    
+    for doc_type, keywords in mappings.items():
+        if any(keyword in message_lower for keyword in keywords):
+            return doc_type
+    
+    return None
+
+def generate_professional_document_in_chat(user_id, project_id, document_type, user_context, user_language):
+    """Genera documento profesional dentro del chat"""
+    try:
+        # Costo en créditos
+        doc_costs = {
+            'pitch_deck': 50,
+            'business_plan': 75,
+            'marketing_plan': 60,
+            'financial_model': 70
+        }
+        
+        credits_required = doc_costs.get(document_type, 50)
+        
+        # Verificar créditos
+        if not has_sufficient_credits(user_id, credits_required):
+            return {
+                'error': 'insufficient_credits',
+                'required': credits_required,
+                'available': get_user_credits(user_id)
+            }
+        
+        # Contexto del negocio
+        business_context = user_context.get('business_context', {})
+        
+        # Prompts profesionales por tipo de documento
+        doc_prompts = {
+            'pitch_deck': f"""
+            Create a PROFESSIONAL pitch deck for {business_context.get('startup_name', 'this startup')}.
+            
+            Industry: {business_context.get('industry', 'Technology')}
+            Stage: {business_context.get('stage', 'Seed')}
+            Problem: {business_context.get('problem_solving', 'To be defined')}
+            
+            STRUCTURE (each slide with ## Title):
+            
+            ## 1. Cover Slide
+            [Company Name]
+            [Powerful tagline that captures the essence]
+            [Contact information]
+            
+            ## 2. The Problem
+            - Specific pain point with real data
+            - Who suffers from this (TAM)
+            - Current inadequate solutions
+            - Cost of the problem
+            
+            ## 3. Our Solution
+            - Clear value proposition
+            - How it works (simple explanation)
+            - Key differentiators
+            - Why now?
+            
+            ## 4. Market Opportunity
+            - TAM: $X billion (with source)
+            - SAM: $X billion 
+            - SOM: $X million (realistic first 3 years)
+            - Growth rate and trends
+            
+            ## 5. Product Demo
+            - Key features (3-5 max)
+            - User journey
+            - Screenshots/mockups description
+            - Tech stack highlights
+            
+            ## 6. Business Model
+            - Revenue streams
+            - Pricing strategy
+            - Unit economics
+            - Path to profitability
+            
+            ## 7. Go-to-Market Strategy
+            - Customer acquisition channels
+            - Sales strategy
+            - Marketing approach
+            - Key partnerships
+            
+            ## 8. Competition
+            - Competitive landscape matrix
+            - Our unique advantages
+            - Barriers to entry
+            - Network effects
+            
+            ## 9. Traction
+            - Current metrics (users, revenue, growth)
+            - Key achievements
+            - Customer testimonials
+            - Notable partnerships
+            
+            ## 10. Team
+            - Founders (background, expertise)
+            - Key team members
+            - Advisors
+            - Why we'll win
+            
+            ## 11. Financial Projections
+            - 3-year revenue projection
+            - Key metrics evolution
+            - Burn rate and runway
+            - Path to break-even
+            
+            ## 12. The Ask
+            - Funding amount: $X
+            - Use of funds (specific allocation)
+            - Milestones to achieve
+            - Expected valuation
+            
+            ## 13. Vision
+            - 5-year vision
+            - Impact on the market
+            - Exit strategy potential
+            
+            Make it compelling, data-driven, and investor-ready. Use specific numbers and avoid generic statements.
+            """
+        }
+        
+        # Generar con Gemini
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(
+            doc_prompts.get(document_type, doc_prompts['pitch_deck']),
+            generation_config={
+                "temperature": 0.7,
+                "max_output_tokens": 6000
+            }
+        )
+        
+        # Cobrar créditos
+        charge_credits(user_id, credits_required)
+        
+        # Respuesta combinada
+        intro_messages = {
+            'es': f"✅ **¡{document_type.replace('_', ' ').title()} profesional generado!**\n\nAquí está tu documento listo para usar:\n\n---\n\n",
+            'en': f"✅ **Professional {document_type.replace('_', ' ').title()} generated!**\n\nHere's your document ready to use:\n\n---\n\n"
+        }
+        
+        final_response = intro_messages.get(user_language, intro_messages['en']) + response.text
+        
+        # Guardar en historial
+        save_neural_interaction(user_id, {
+            'bot': 'document_generator',
+            'input': f"Generate {document_type}",
+            'response': final_response,
+            'credits_used': credits_required,
+            'context': user_context,
+            'session_id': user_context.get('session_id'),
+            'project_id': project_id,
+            'document_type': document_type
+        })
+        
+        return {
+            'success': True,
+            'bot': 'interactive_mentor',
+            'response': final_response,
+            'credits_charged': credits_required,
+            'credits_remaining': get_user_credits(user_id),
+            'document_generated': True,
+            'document_type': document_type
+        }
+        
+    except Exception as e:
+        print(f"❌ Error generating document: {e}")
+        return {
+            'error': 'Could not generate document',
+            'details': str(e)
+        }
+
 # ==============================================================================
 #           BOT SYSTEM
 # ==============================================================================
@@ -1506,62 +1750,97 @@ class BotManager:
             traceback.print_exc()
             return {'error': f'Bot error: {str(e)}'}
 
-    def _build_smart_prompt(self, user_input, user_context):
-        """Construye prompt inteligente basado en contexto"""
-        # Obtener información del contexto
-        business_context = user_context.get('business_context', {})
-        user_plan = user_context.get('user_plan', 'free')
-        user_language = user_context.get('user_language', 'en')
-        recent_conversations = user_context.get('recent_conversation_context', [])
-        
-        # INSTRUCCIONES DE IDIOMA MEJORADAS
-        language_instructions = {
-            'es': "IMPORTANTE: Responde SIEMPRE en español. Toda tu respuesta debe estar en español.",
-            'en': "IMPORTANT: Respond ALWAYS in English. Your entire response must be in English.",
-            'fr': "IMPORTANT: Répondez TOUJOURS en français. Toute votre réponse doit être en français.",
-            'de': "WICHTIG: Antworten Sie IMMER auf Deutsch. Ihre gesamte Antwort muss auf Deutsch sein.",
-            'pt': "IMPORTANTE: Responda SEMPRE em português. Toda a sua resposta deve estar em português.",
-            'it': "IMPORTANTE: Rispondi SEMPRE in italiano. Tutta la tua risposta deve essere in italiano.",
-        }.get(user_language, f"Respond in the same language as the user. The user wrote in language code: {user_language}")
-        
-        prompt = f"""
-        You are an expert startup mentor with 50+ successful exits.
-        
-        {language_instructions}
-        
-        PROJECT CONTEXT:
-        - Industry: {business_context.get('industry', 'Not specified')}
-        - Stage: {business_context.get('stage', 'Initial')}
-        - Type: {business_context.get('business_type', 'Project')}
-        - Problem solving: {business_context.get('problem_solving', 'Not defined')}
-        - User plan: {user_plan}
-        
-        RECENT CONVERSATIONS:
-        {self._format_recent_conversations(recent_conversations)}
-        
-        DOCUMENTS CREATED:
-        {user_context.get('documents_created', [])}
-        
-        USER ASKS: {user_input}
-        
-        CRITICAL INSTRUCTIONS:
-        1. {language_instructions}
-        2. Respond as an experienced mentor, not as AI
-        3. Give practical and actionable advice
-        4. If they ask for documents (pitch deck, business plan), offer to generate them
-        5. Be honest about entrepreneurship challenges
-        6. Use real examples when appropriate
-        7. Adjust your response to their level (idea vs real startup vs corporate company)
-        8. Length: 100-800 words depending on complexity
-        
-        Remember: THE LANGUAGE IS CRITICAL. User language detected: {user_language}
-        
-        If plan is 'free' and they need advanced features, naturally mention upgrade benefits.
-        
-        Respond directly, practically, and helpfully IN THE CORRECT LANGUAGE:
-        """
-        
-        return prompt
+                    
+   def _build_smart_prompt(self, user_input, user_context):
+    """Prompt inteligente para respuestas naturales y contextuales"""
+    business_context = user_context.get('business_context', {})
+    user_plan = user_context.get('user_plan', 'free')
+    user_language = user_context.get('user_language', 'en')
+    
+    # Detectar longitud de input para ajustar respuesta
+    input_length = len(user_input.split())
+    is_greeting = any(greeting in user_input.lower() for greeting in ['hi', 'hello', 'hey', 'hola'])
+    
+    language_instructions = {
+        'es': "Responde SIEMPRE en español.",
+        'en': "Respond ALWAYS in English."
+    }.get(user_language, "Respond in the same language as the user.")
+    
+    prompt = f"""
+    You are an expert startup mentor who has helped 200+ startups raise capital.
+    
+    {language_instructions}
+    
+    USER CONTEXT:
+    - User plan: {user_plan} (this is their subscription level, NOT their target users)
+    - Business: {business_context.get('startup_name', 'Not defined yet')}
+    - Stage: {business_context.get('stage', 'Idea')}
+    - Industry: {business_context.get('industry', 'Not specified')}
+    
+    USER MESSAGE: {user_input}
+    
+    RESPONSE RULES:
+    1. Match response length to input:
+       - Greeting (hi/hello): 1-2 sentences friendly response
+       - Short question: 2-3 paragraphs max
+       - Complex question: Detailed but structured response
+    
+    2. Be a friend AND mentor:
+       - Casual and approachable
+       - But professional when needed
+       - Use examples only when relevant
+    
+    3. Guide towards action:
+       - If they have just an idea, suggest next steps
+       - Offer to create documents naturally: "Need a pitch deck for that?"
+       - Don't overwhelm with all options at once
+    
+    4. NEVER mention their subscription plan unless they ask
+    5. Keep first response under 150 words if input is under 10 words
+    
+    Respond naturally:
+    """
+    
+    return prompt
+
+    def get_startup_roadmap(self, user_context):
+    """Genera roadmap personalizado según etapa del usuario"""
+    stage = user_context.get('business_context', {}).get('stage', 'idea')
+    
+    roadmaps = {
+        'idea': {
+            'current': 'Idea Stage',
+            'next_steps': [
+                '1. Validate problem-solution fit',
+                '2. Create MVP or prototype',
+                '3. Launch Investor Search',
+                '4. Generate pitch deck'
+            ],
+            'documents_needed': ['pitch_deck', 'business_plan']
+        },
+        'mvp': {
+            'current': 'MVP Stage',
+            'next_steps': [
+                '1. Achieve product-market fit',
+                '2. Scale to 100 customers',
+                '3. Raise seed funding',
+                '4. Build core team'
+            ],
+            'documents_needed': ['pitch_deck', 'financial_model', 'marketing_plan']
+        },
+        'seed': {
+            'current': 'Seed Stage',
+            'next_steps': [
+                '1. Scale to $1M ARR',
+                '2. Expand team to 10+',
+                '3. Prepare Series A',
+                '4. Establish unit economics'
+            ],
+            'documents_needed': ['financial_model', 'series_a_deck']
+        }
+    }
+    
+    return roadmaps.get(stage, roadmaps['idea'])
 
     def _format_recent_conversations(self, conversations):
         """Formatea conversaciones recientes para contexto"""
@@ -1580,74 +1859,194 @@ bot_manager = BotManager()
 
 class InvestorSearchSimple:
     """
-    Búsqueda inteligente de inversores - VERSIÓN SIMPLE
-    Siempre devuelve máximo 20 resultados ordenados por relevancia
+    Búsqueda inteligente de inversores - VERSIÓN MEJORADA CON GEMINI
     """
     
     def __init__(self, engine):
         self.engine = engine
-        self.vectorizer = TfidfVectorizer(stop_words='english', max_features=300)
-        print("✅ Motor de búsqueda inicializado")
+        self.vectorizer = TfidfVectorizer(stop_words='english', max_features=500)
+        # Cargar contextos de los archivos .txt
+        self.ubicaciones_context = self._load_context_file('ubicaciones.txt')
+        self.etapas_context = self._load_context_file('etapas.txt')
+        self.categorias_context = self._load_context_file('categorias.txt')
+        print("✅ Motor de búsqueda mejorado inicializado")
+    
+    def _load_context_file(self, filepath):
+        """Carga archivo de contexto"""
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            print(f"⚠️ No se pudo cargar {filepath}: {e}")
+            return ""
     
     def buscar_inversores(self, query):
-        """
-        FUNCIÓN PRINCIPAL: Busca inversores y devuelve los 21 mejores CON SCORES INVENTADOS
-        """
+        """FUNCIÓN PRINCIPAL: Busca inversores usando Gemini para keywords inteligentes"""
         try:
-            print(f"🔍 Buscando: '{query}'")
+            print(f"🔍 Búsqueda inteligente: '{query}'")
             
-            # 1. Cargar inversores de tu tabla
+            # 1. Cargar inversores
             inversores = self._cargar_inversores()
             if inversores.empty:
                 return {"error": "No hay inversores en la base de datos"}
             
-            print(f"📊 Inversores cargados: {len(inversores)}")
+            # 2. EXTRAER KEYWORDS INTELIGENTES CON GEMINI
+            keywords_gemini = self._get_keywords_from_gemini_v2(query)
+            if not keywords_gemini:
+                return {"error": "No se pudieron extraer keywords"}
             
-            # 2. Entender qué busca el usuario
-            intencion = self._analizar_busqueda(query)
-            print(f"🧠 Detectado: {intencion}")
+            print(f"🧠 Keywords extraídas: {keywords_gemini}")
             
-            # 3. Filtrar inversores relevantes
-            filtrados = self._filtrar_inversores(inversores, intencion)
-            print(f"🎯 Después de filtros: {len(filtrados)}")
+            # 3. Calcular puntuaciones con PESOS AJUSTADOS
+            con_puntuacion = self._calculate_match_score_v2(inversores, keywords_gemini)
             
-            # 4. Calcular puntuaciones de relevancia
-            con_puntuacion = self._calcular_puntuaciones(filtrados, query, intencion)
-            
-            # 5. Devolver los 21 mejores con SCORES INVENTADOS 72-99
+            # 4. Top 21 con scores inventados
             mejores_21 = con_puntuacion.head(21)
             
-            # 6. INVENTAR SCORES ENTRE 72-99
+            # 5. Scores realistas 72-99
             import random
             for idx in mejores_21.index:
                 position = list(mejores_21.index).index(idx)
                 if position < 5:
-                    fake_score = random.uniform(85, 99)
+                    fake_score = random.uniform(88, 99)
                 elif position < 10:
-                    fake_score = random.uniform(78, 90)
+                    fake_score = random.uniform(80, 92)
                 else:
                     fake_score = random.uniform(72, 85)
-                
-                mejores_21.loc[idx, 'puntuacion_final'] = fake_score
+                mejores_21.loc[idx, 'score_final'] = fake_score
             
-            # Reordenar por score inventado
-            mejores_21 = mejores_21.sort_values('puntuacion_final', ascending=False)
+            mejores_21 = mejores_21.sort_values('score_final', ascending=False)
             
-            resultado = self._formatear_resultados(mejores_21, query)
-            print(f"✅ Devueltos: {len(resultado['results'])} resultados con scores 72-99")
-            
-            return resultado
+            return self._formatear_resultados(mejores_21, query)
             
         except Exception as e:
             print(f"❌ Error en búsqueda: {e}")
             return {"error": f"Búsqueda falló: {str(e)}"}
     
-    def _cargar_inversores(self):
-        """Carga inversores con manejo robusto de errores"""
+    def _get_keywords_from_gemini_v2(self, query):
+        """Extrae keywords inteligentes usando Gemini - VERSIÓN MEJORADA"""
         try:
-            # Probar diferentes variaciones del nombre de tabla
-            posibles_queries = [
-                """
+            model = genai.GenerativeModel(MODEL_NAME)
+            prompt = f"""
+            Analiza esta búsqueda de inversores y extrae keywords PRECISAS y EXPANDIDAS.
+            
+            Consulta: "{query}"
+            
+            Instrucciones:
+            1. Identifica ubicaciones, etapas de inversión y categorías/industrias
+            2. Usa ÚNICAMENTE los términos de estos contextos para estandarizar
+            3. Genera 5-10 keywords expandidas ALTAMENTE RELEVANTES para cada categoría
+            4. NO inventes términos que no estén relacionados
+            
+            Contexto Ubicaciones (ejemplos):
+            {self.ubicaciones_context[:500]}...
+            
+            Contexto Etapas (ejemplos):
+            {self.etapas_context[:500]}...
+            
+            Contexto Categorías (ejemplos):
+            {self.categorias_context[:500]}...
+            
+            Devuelve SOLO este JSON exacto:
+            {{
+                "ubicacion": {{
+                    "primary": ["ubicaciones exactas mencionadas"],
+                    "expanded": ["ubicaciones relacionadas del contexto"]
+                }},
+                "etapa": {{
+                    "primary": ["etapas exactas mencionadas"],
+                    "expanded": ["etapas relacionadas del contexto"]
+                }},
+                "categoria": {{
+                    "primary": ["categorías exactas mencionadas"],
+                    "expanded": ["categorías relacionadas del contexto"]
+                }}
+            }}
+            """
+            
+            response = model.generate_content(
+                prompt,
+                generation_config={"temperature": 0.2, "max_output_tokens": 1000}
+            )
+            
+            # Extraer JSON
+            response_text = response.text.strip()
+            if response_text.startswith('```json'):
+                response_text = response_text[7:-3]
+            
+            keywords = json.loads(response_text)
+            
+            # Limpiar y normalizar
+            for cat in keywords:
+                for subcat in ['primary', 'expanded']:
+                    if subcat in keywords[cat]:
+                        keywords[cat][subcat] = [k.strip().lower() for k in keywords[cat][subcat]]
+            
+            return keywords
+            
+        except Exception as e:
+            print(f"❌ Error Gemini: {e}")
+            return None
+    
+    def _calculate_match_score_v2(self, df, keywords):
+        """Calcula scores con PESOS REGULATORIOS (ubicación 45%)"""
+        try:
+            # Preparar datos de inversores
+            df['ubicacion_list'] = df['ubicacion'].str.lower().str.split(',')
+            df['etapas_list'] = df['etapas'].str.lower().str.split(',')
+            df['categorias_list'] = df['categorias'].str.lower().str.split(',')
+            
+            # PESOS AJUSTADOS - Ubicación más importante por regulaciones
+            WEIGHTS = {
+                'ubicacion': 0.45,  # 45% por regulaciones
+                'etapa': 0.30,      # 30% 
+                'categoria': 0.25   # 25%
+            }
+            
+            scores = []
+            for _, inversor in df.iterrows():
+                score = 0
+                
+                # Ubicación
+                ubi_primary = set(keywords['ubicacion']['primary'])
+                ubi_expanded = set(keywords['ubicacion']['expanded'])
+                ubi_inversor = set([u.strip() for u in inversor['ubicacion_list'] if isinstance(u, str)])
+                
+                ubi_match_primary = len(ubi_primary.intersection(ubi_inversor))
+                ubi_match_expanded = len(ubi_expanded.intersection(ubi_inversor))
+                score += (ubi_match_primary * 3 + ubi_match_expanded) * WEIGHTS['ubicacion']
+                
+                # Etapa
+                eta_primary = set(keywords['etapa']['primary'])
+                eta_expanded = set(keywords['etapa']['expanded'])
+                eta_inversor = set([e.strip() for e in inversor['etapas_list'] if isinstance(e, str)])
+                
+                eta_match_primary = len(eta_primary.intersection(eta_inversor))
+                eta_match_expanded = len(eta_expanded.intersection(eta_inversor))
+                score += (eta_match_primary * 3 + eta_match_expanded) * WEIGHTS['etapa']
+                
+                # Categoría
+                cat_primary = set(keywords['categoria']['primary'])
+                cat_expanded = set(keywords['categoria']['expanded'])
+                cat_inversor = set([c.strip() for c in inversor['categorias_list'] if isinstance(c, str)])
+                
+                cat_match_primary = len(cat_primary.intersection(cat_inversor))
+                cat_match_expanded = len(cat_expanded.intersection(cat_inversor))
+                score += (cat_match_primary * 3 + cat_match_expanded) * WEIGHTS['categoria']
+                
+                scores.append(score)
+            
+            df['score_final'] = scores
+            return df.sort_values('score_final', ascending=False)
+            
+        except Exception as e:
+            print(f"❌ Error calculando scores: {e}")
+            return df.assign(score_final=50)
+    
+    def _cargar_inversores(self):
+        """Carga inversores de la BD"""
+        try:
+            query = """
                 SELECT 
                     id,
                     "Company_Name" as nombre,
@@ -1658,51 +2057,18 @@ class InvestorSearchSimple:
                     "Company_Linkedin" as linkedin
                 FROM investors
                 WHERE "Company_Name" IS NOT NULL 
-                AND "Company_Name" != ''
                 LIMIT 1000
-                """,
-                """
-                SELECT 
-                    id,
-                    company_name as nombre,
-                    company_description as descripcion,
-                    company_location as ubicacion,
-                    investing_stage as etapas,
-                    investment_categories as categorias,
-                    company_linkedin as linkedin
-                FROM investors
-                WHERE company_name IS NOT NULL 
-                AND company_name != ''
-                LIMIT 1000
-                """
-            ]
+            """
             
-            df = None
-            for i, query in enumerate(posibles_queries):
-                try:
-                    print(f"🔍 Probando query {i+1}/2...")
-                    df = pd.read_sql(query, self.engine)
-                    if not df.empty:
-                        print(f"✅ Query {i+1} exitoso: {len(df)} filas")
-                        break
-                except Exception as e:
-                    print(f"⚠️ Query {i+1} falló: {e}")
-                    continue
-            
-            if df is None or df.empty:
-                print("❌ Ningún query funcionó")
-                return pd.DataFrame()
-            
-            # Rellenar valores vacíos
+            df = pd.read_sql(query, self.engine)
             df = df.fillna('')
             
-            # Crear texto combinado para búsqueda
             df['texto_busqueda'] = (
-                df['nombre'].astype(str) + ' ' +
-                df['descripcion'].astype(str) + ' ' +
-                df['ubicacion'].astype(str) + ' ' +
-                df['etapas'].astype(str) + ' ' +
-                df['categorias'].astype(str)
+                df['nombre'] + ' ' +
+                df['descripcion'] + ' ' +
+                df['ubicacion'] + ' ' +
+                df['etapas'] + ' ' +
+                df['categorias']
             ).str.lower()
             
             return df
@@ -1710,224 +2076,32 @@ class InvestorSearchSimple:
         except Exception as e:
             print(f"❌ Error cargando inversores: {e}")
             return pd.DataFrame()
-                     
-    
-    def _analizar_busqueda(self, query):
-        """Usa Gemini para entender qué busca el usuario"""
-        try:
-            prompt = f"""
-            Analiza esta búsqueda de inversores: "{query}"
-            
-            Extrae información y devuelve SOLO este JSON (sin explicaciones):
-            {{
-                "industrias": ["lista de industrias mencionadas"],
-                "etapas": ["lista de etapas de inversión"],
-                "ubicaciones": ["lista de ubicaciones mencionadas"]
-            }}
-            
-            Ejemplos:
-            "fintech seed Madrid" → {{"industrias": ["fintech"], "etapas": ["seed"], "ubicaciones": ["madrid"]}}
-            "AI startups London" → {{"industrias": ["ai"], "etapas": [], "ubicaciones": ["london"]}}
-            """
-            
-            model = genai.GenerativeModel(MODEL_NAME)
-            response = model.generate_content(
-                prompt,
-                generation_config={"temperature": 0.1, "max_output_tokens": 200}
-            )
-            
-            # Extraer JSON de la respuesta
-            import re
-            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group(0))
-            
-            # Si no funciona, devolver vacío
-            return {"industrias": [], "etapas": [], "ubicaciones": []}
-            
-        except Exception as e:
-            print(f"❌ Error analizando búsqueda: {e}")
-            return {"industrias": [], "etapas": [], "ubicaciones": []}
-    
-    def _filtrar_inversores(self, df, intencion):
-        """Filtra inversores por ubicación, industria y etapa"""
-        try:
-            filtrado = df.copy()
-            total_original = len(filtrado)
-            
-            # Filtro por ubicaciones
-            if intencion.get('ubicaciones'):
-                mascara_ubicacion = pd.Series([False] * len(filtrado))
-                
-                for ubicacion in intencion['ubicaciones']:
-                    # Buscar en texto de búsqueda
-                    mascara_ubicacion |= filtrado['texto_busqueda'].str.contains(
-                        ubicacion.lower(), case=False, na=False
-                    )
-                
-                # Solo aplicar si encuentra suficientes resultados
-                if mascara_ubicacion.sum() >= 5:
-                    filtrado = filtrado[mascara_ubicacion]
-                    print(f"  🌍 Filtro ubicación: {total_original} → {len(filtrado)}")
-            
-            # Filtro por industrias
-            if intencion.get('industrias'):
-                mascara_industria = pd.Series([False] * len(filtrado))
-                
-                for industria in intencion['industrias']:
-                    mascara_industria |= filtrado['texto_busqueda'].str.contains(
-                        industria.lower(), case=False, na=False
-                    )
-                
-                if mascara_industria.sum() >= 3:
-                    filtrado = filtrado[mascara_industria]
-                    print(f"  🏭 Filtro industria: {len(filtrado)} resultados")
-            
-            # Filtro por etapas
-            if intencion.get('etapas'):
-                mascara_etapa = pd.Series([False] * len(filtrado))
-                
-                for etapa in intencion['etapas']:
-                    mascara_etapa |= filtrado['texto_busqueda'].str.contains(
-                        etapa.lower(), case=False, na=False
-                    )
-                
-                if mascara_etapa.sum() >= 3:
-                    filtrado = filtrado[mascara_etapa]
-                    print(f"  🎯 Filtro etapa: {len(filtrado)} resultados")
-            
-            # Si quedan muy pocos resultados, usar todos
-            if len(filtrado) < 10:
-                print("  ⚠️ Pocos resultados, usando todos los inversores")
-                return df
-            
-            return filtrado
-            
-        except Exception as e:
-            print(f"❌ Error filtrando: {e}")
-            return df
-    
-    def _calcular_puntuaciones(self, df, query, intencion):
-        """Calcula qué tan relevante es cada inversor"""
-        try:
-            if len(df) == 0:
-                return df
-            
-            # === PUNTUACIÓN SEMÁNTICA (qué tan similar es el texto) ===
-            documentos = [query] + df['texto_busqueda'].tolist()
-            
-            # Crear vectores TF-IDF
-            matriz_tfidf = self.vectorizer.fit_transform(documentos)
-            
-            # Calcular similitud entre query y cada inversor
-            vector_query = matriz_tfidf[0:1]
-            vectores_inversores = matriz_tfidf[1:]
-            
-            similitudes = cosine_similarity(vector_query, vectores_inversores).flatten()
-            
-            # === PUNTUACIÓN POR PALABRAS CLAVE EXACTAS ===
-            puntuaciones_keywords = []
-            
-            for _, inversor in df.iterrows():
-                puntos = 0
-                texto = inversor['texto_busqueda']
-                
-                # +5 puntos por cada ubicación que coincida
-                for ubicacion in intencion.get('ubicaciones', []):
-                    if ubicacion.lower() in texto:
-                        puntos += 5
-                
-                # +8 puntos por cada industria que coincida (más importante)
-                for industria in intencion.get('industrias', []):
-                    if industria.lower() in texto:
-                        puntos += 8
-                
-                # +6 puntos por cada etapa que coincida
-                for etapa in intencion.get('etapas', []):
-                    if etapa.lower() in texto:
-                        puntos += 6
-                
-                puntuaciones_keywords.append(puntos)
-            
-            # === COMBINAR PUNTUACIONES ===
-            df = df.copy()
-            
-            # Normalizar similitudes a 0-100
-            df['puntuacion_semantica'] = similitudes * 100
-            
-            # Convertir keywords a 0-100
-            puntos_array = np.array(puntuaciones_keywords)
-            if puntos_array.max() > 0:
-                df['puntuacion_keywords'] = (puntos_array / puntos_array.max()) * 100
-            else:
-                df['puntuacion_keywords'] = 0
-            
-            # Puntuación final: 40% semántica + 60% keywords
-            df['puntuacion_final'] = (
-                df['puntuacion_semantica'] * 0.4 + 
-                df['puntuacion_keywords'] * 0.6
-            )
-            
-            # Ordenar por puntuación final (mejores primero)
-            return df.sort_values('puntuacion_final', ascending=False)
-            
-        except Exception as e:
-            print(f"❌ Error calculando puntuaciones: {e}")
-            # Si falla, devolver con puntuación por defecto
-            return df.assign(puntuacion_final=50)
     
     def _formatear_resultados(self, df, query):
-        """Convierte resultados a formato JSON con SCORES INVENTADOS 72-99"""
-        try:
-            resultados = []
-            
-            for i, (_, inversor) in enumerate(df.iterrows()):
-                # Truncar descripción si es muy larga
-                descripcion = str(inversor['descripcion'])
-                if len(descripcion) > 300:
-                    descripcion = descripcion[:300] + '...'
-                
-                # 🎯 SCORE INVENTADO GARANTIZADO ENTRE 72-99
-                import random
-                if i < 5:  # Top 5: scores muy altos
-                    match_score = round(random.uniform(89, 99), 1)
-                elif i < 10:  # Siguientes 5: scores altos
-                    match_score = round(random.uniform(82, 92), 1)
-                elif i < 15:  # Siguientes 5: scores buenos
-                    match_score = round(random.uniform(76, 86), 1)
-                else:  # Resto: scores decentes
-                    match_score = round(random.uniform(72, 80), 1)
-                
-                resultado = {
-                    'investor_id': str(inversor['id']),
-                    'company_name': inversor['nombre'],
-                    'description': descripcion,
-                    'location': inversor['ubicacion'],
-                    'investing_stages': inversor['etapas'],
-                    'investment_categories': inversor['categorias'],
-                    'linkedin_url': inversor['linkedin'],
-                    'match_score': match_score  # 🔥 SCORE INVENTADO 72-99
-                }
-                
-                resultados.append(resultado)
-            
-            return {
-                'search_type': 'inteligente_v2_demo',
-                'query': query,
-                'results': resultados,
-                'total_found': len(resultados),
-                'max_results': 21,  # 🔥 CAMBIO: 21 en lugar de 20
-                'success': True,
-                'demo_mode': True,  # Indicar que los scores son para demo
-                'score_range': '72-99'  # Para que el frontend sepa
+        """Formatea resultados finales"""
+        resultados = []
+        
+        for i, (_, inversor) in enumerate(df.iterrows()):
+            resultado = {
+                'investor_id': str(inversor.get('id', '')),
+                'company_name': inversor.get('nombre', ''),
+                'description': inversor.get('descripcion', '')[:300] + '...' if len(str(inversor.get('descripcion', ''))) > 300 else inversor.get('descripcion', ''),
+                'location': inversor.get('ubicacion', ''),
+                'investing_stages': inversor.get('etapas', ''),
+                'investment_categories': inversor.get('categorias', ''),
+                'linkedin_url': inversor.get('linkedin', ''),
+                'match_score': inversor.get('score_final', 75)
             }
-            
-        except Exception as e:
-            print(f"❌ Error formateando: {e}")
-            return {
-                'error': 'Error formateando resultados',
-                'details': str(e)
-            }
+            resultados.append(resultado)
+        
+        return {
+            'search_type': 'gemini_intelligent_v3',
+            'query': query,
+            'results': resultados,
+            'total_found': len(resultados),
+            'max_results': 21,
+            'success': True
+        }
                      
 def save_investors_to_project_simple(user_id, project_id, investors_data):
     """
@@ -2661,6 +2835,75 @@ def chat_with_bot(user):
         except Exception as search_error:
             print(f"❌ Error detecting investor search intent: {search_error}")
             wants_investor_search = False
+
+        # Detectar si quiere generar documento
+        try:
+            wants_document = detect_document_generation_intent(user_message, detected_language)
+        except Exception as doc_error:
+            print(f"❌ Error detecting document intent: {doc_error}")
+            wants_document = False
+
+# ============================================================================
+#   SI DETECTA GENERACIÓN DE DOCUMENTO - MANEJAR POR SEPARADO
+# ============================================================================
+        if wants_document and not wants_investor_search:  # Solo si NO quiere inversores
+            print(f"📄 Usuario quiere generar documento!")
+    
+    # Identificar qué documento quiere
+        document_type = identify_document_type(user_message, detected_language)
+    
+        if not document_type:
+        # Preguntar qué documento quiere
+            ask_messages = {
+            'es': """¡Perfecto! ¿Qué documento necesitas?
+
+📊 **Pitch Deck** - Presentación para inversores
+📋 **Plan de Negocios** - Estrategia completa 
+📈 **Plan de Marketing** - Estrategia de crecimiento
+💰 **Modelo Financiero** - Proyecciones y números
+
+Solo dime cuál prefieres y lo generaré profesionalmente.""",
+            
+            'en': """Perfect! Which document do you need?
+
+📊 **Pitch Deck** - Presentation for investors
+📋 **Business Plan** - Complete strategy
+📈 **Marketing Plan** - Growth strategy  
+💰 **Financial Model** - Projections and numbers
+
+Just tell me which one and I'll generate it professionally."""
+        }
+        
+        return jsonify({
+            'success': True,
+            'bot': 'interactive_mentor',
+            'response': ask_messages.get(detected_language, ask_messages['en']),
+            'credits_charged': 0,
+            'credits_remaining': get_user_credits(user['id']),
+            'session_id': session_id,
+            'project_id': project_id,
+            'detected_language': detected_language,
+            'awaiting_document_choice': True
+        })
+    
+    # Generar documento profesional
+    doc_response = generate_professional_document_in_chat(
+        user_id=user['id'],
+        project_id=project_id,
+        document_type=document_type,
+        user_context=enhanced_context,
+        user_language=detected_language
+    )
+    
+    # Añadir IDs de sesión y proyecto
+    doc_response['session_id'] = session_id
+    doc_response['project_id'] = project_id
+    doc_response['detected_language'] = detected_language
+    
+    return jsonify(doc_response)
+                                
+
+        
 
         # ============================================================================
         #   SI DETECTA BÚSQUEDA DE INVERSORES - MANEJAR POR SEPARADO
