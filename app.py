@@ -2787,6 +2787,21 @@ Want me to try a broader search?"""
                     if credits_after is None:
                         return jsonify({'error': 'No se pudieron cobrar créditos'}), 500
                     
+                    # 4. GUARDAR INVERSORES EN EL PROYECTO
+                    saved_count = save_investors_to_project_simple(
+                        user['id'], 
+                        project_id, 
+                        investors_found
+                    )
+                    
+                    # 5. GUARDAR EN HISTORIAL DE BÚSQUEDAS
+                    save_search_to_history_simple(
+                        user['id'], 
+                        user_message, 
+                        len(investors_found), 
+                        credits_cost
+                    )
+                    
                     # 6. CREAR TABLA PARA MOSTRAR EN EL CHAT (solo primeros 10)
                     investors_table = create_investors_table_for_chat(
                         investors_found[:10],  # Solo primeros 10 en chat
