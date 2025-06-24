@@ -257,6 +257,59 @@ def verify_jwt_token(token):
         print(f"Error verifying token: {e}")
         return None
 
+def require_plan(required_plan):
+    """
+    Decorator para verificar que el usuario tiene el plan requerido
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(user, *args, **kwargs):
+            user_plan = user.get('plan', 'free')
+            
+            # Jerarquía de planes: free < growth < pro
+            plan_hierarchy = {'free': 1, 'growth': 2, 'pro': 3}
+            
+            user_level = plan_hierarchy.get(user_plan, 1)
+            required_level = plan_hierarchy.get(required_plan, 1)
+            
+            if user_level < required_level:
+                return jsonify({
+                    'error': 'plan_upgrade_required',
+                    'current_plan': user_plan,
+                    'required_plan': required_plan,
+                    'message': f'Este feature requiere plan {required_plan}'
+                }), 403
+            
+            return f(user, *args, **kwargs)
+        return decorated_function
+    return decorator
+
+def ml_investor_search(query, user_preferences, max_results=20):
+    """
+    Función principal de búsqueda ML de inversores - SIEMPRE 20 RESULTADOS
+    """
+    try:
+        print(f"🔍 Iniciando búsqueda ML: '{query}'")
+        
+        # Crear instancia del motor de búsqueda
+        search_engine = InvestorSearchSimple(engine)
+        
+        # Ejecutar búsqueda (ya está limitado a 20 en la clase)
+        resultado = search_engine.buscar_inversores(query)
+        
+        print(f"✅ Búsqueda completada: {len(resultado.get('results', []))} resultados")
+        return resultado
+        
+    except Exception as e:
+        print(f"❌ Error en ml_investor_search: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "error": f"Search failed: {str(e)}",
+            "success": False,
+            "query": query
+        }
+        
 def require_auth(f):
     """Decorator para endpoints que requieren autenticación"""
     @wraps(f)
