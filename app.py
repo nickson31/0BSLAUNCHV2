@@ -1752,95 +1752,200 @@ class BotManager:
 
                     
    def _build_smart_prompt(self, user_input, user_context):
-    """Prompt inteligente para respuestas naturales y contextuales"""
-    business_context = user_context.get('business_context', {})
-    user_plan = user_context.get('user_plan', 'free')
-    user_language = user_context.get('user_language', 'en')
+        """Prompt inteligente para respuestas naturales y contextuales"""
+        business_context = user_context.get('business_context', {})
+        user_plan = user_context.get('user_plan', 'free')
+        user_language = user_context.get('user_language', 'en')
+        
+        # Detectar longitud de input para ajustar respuesta
+        input_length = len(user_input.split())
+        is_greeting = any(greeting in user_input.lower() for greeting in ['hi', 'hello', 'hey', 'hola'])
+        
+        language_instructions = {
+            'es': "Responde SIEMPRE en español.",
+            'en': "Respond ALWAYS in English."
+        }.get(user_language, "Respond in the same language as the user.")
+        
+        # Construir sección de roadmap si está disponible
+        roadmap_section = ""
+        if user_context.get('show_roadmap') and user_context.get('roadmap'):
+            roadmap = user_context['roadmap']
+            roadmap_section = f"""
     
-    # Detectar longitud de input para ajustar respuesta
-    input_length = len(user_input.split())
-    is_greeting = any(greeting in user_input.lower() for greeting in ['hi', 'hello', 'hey', 'hola'])
-    
-    language_instructions = {
-        'es': "Responde SIEMPRE en español.",
-        'en': "Respond ALWAYS in English."
-    }.get(user_language, "Respond in the same language as the user.")
-    
-    prompt = f"""
-    You are an expert startup mentor who has helped 200+ startups raise capital.
-    
-    {language_instructions}
-    
-    USER CONTEXT:
-    - User plan: {user_plan} (this is their subscription level, NOT their target users)
-    - Business: {business_context.get('startup_name', 'Not defined yet')}
-    - Stage: {business_context.get('stage', 'Idea')}
-    - Industry: {business_context.get('industry', 'Not specified')}
-    
-    USER MESSAGE: {user_input}
-    
-    RESPONSE RULES:
-    1. Match response length to input:
-       - Greeting (hi/hello): 1-2 sentences friendly response
-       - Short question: 2-3 paragraphs max
-       - Complex question: Detailed but structured response
-    
-    2. Be a friend AND mentor:
-       - Casual and approachable
-       - But professional when needed
-       - Use examples only when relevant
-    
-    3. Guide towards action:
-       - If they have just an idea, suggest next steps
-       - Offer to create documents naturally: "Need a pitch deck for that?"
-       - Don't overwhelm with all options at once
-    
-    4. NEVER mention their subscription plan unless they ask
-    5. Keep first response under 150 words if input is under 10 words
-    
-    Respond naturally:
+    CURRENT ROADMAP FOR USER:
+    - Stage: {roadmap.get('current', '')}
+    - Urgent: {roadmap.get('urgent_action', '')}
+    - CTA to include naturally: {roadmap.get('cta', '')}
     """
-    
-    return prompt
+        
+        prompt = f"""
+        You are an expert startup mentor who has helped 200+ startups raise capital.
+        
+        {language_instructions}
+        
+        USER CONTEXT:
+        - User plan: {user_plan} (this is their subscription level, NOT their target users)
+        - Business: {business_context.get('startup_name', 'Not defined yet')}
+        - Stage: {business_context.get('stage', 'Idea')}
+        - Industry: {business_context.get('industry', 'Not specified')}
+        {roadmap_section}
+        
+        USER MESSAGE: {user_input}
+        
+        RESPONSE RULES:
+        1. Match response length to input:
+           - Greeting (hi/hello): 1-2 sentences friendly response
+           - Short question: 2-3 paragraphs max
+           - Complex question: Detailed but structured response
+        
+        2. Be a friend AND mentor:
+           - Casual and approachable
+           - But professional when needed
+           - Use examples only when relevant
+        
+        3. Guide towards action:
+           - If they have just an idea, suggest next steps
+           - Offer to create documents naturally: "Need a pitch deck for that?"
+           - Don't overwhelm with all options at once
+           - If roadmap CTA is provided, work it into your response naturally
+        
+        4. NEVER mention their subscription plan unless they ask
+        5. Keep first response under 150 words if input is under 10 words
+        
+        Respond naturally:
+        """
+        
+        return prompt
 
     def get_startup_roadmap(self, user_context):
-    """Genera roadmap personalizado según etapa del usuario"""
-    stage = user_context.get('business_context', {}).get('stage', 'idea')
-    
-    roadmaps = {
-        'idea': {
-            'current': 'Idea Stage',
-            'next_steps': [
-                '1. Validate problem-solution fit',
-                '2. Create MVP or prototype',
-                '3. Launch Investor Search',
-                '4. Generate pitch deck'
-            ],
-            'documents_needed': ['pitch_deck', 'business_plan']
-        },
-        'mvp': {
-            'current': 'MVP Stage',
-            'next_steps': [
-                '1. Achieve product-market fit',
-                '2. Scale to 100 customers',
-                '3. Raise seed funding',
-                '4. Build core team'
-            ],
-            'documents_needed': ['pitch_deck', 'financial_model', 'marketing_plan']
-        },
-        'seed': {
-            'current': 'Seed Stage',
-            'next_steps': [
-                '1. Scale to $1M ARR',
-                '2. Expand team to 10+',
-                '3. Prepare Series A',
-                '4. Establish unit economics'
-            ],
-            'documents_needed': ['financial_model', 'series_a_deck']
+        """Genera roadmap INTELIGENTE que guía + hace upsell según tipo de usuario"""
+        stage = user_context.get('business_context', {}).get('stage', 'idea')
+        user_plan = user_context.get('user_plan', 'free')
+        user_language = user_context.get('user_language', 'en')
+        
+        # Roadmaps personalizados por TIPO DE USUARIO + PLAN
+        roadmaps = {
+            'idea': {
+                'es': {
+                    'current': '💡 Fase Idea',
+                    'urgent_action': '⚡ ACCIÓN INMEDIATA: Valida tu idea en 48h',
+                    'free_steps': [
+                        '✅ Define el problema (Chat conmigo)',
+                        '✅ Identifica 10 early adopters',
+                        '❌ Buscar inversores angel (Requiere Growth)',
+                        '❌ Generar pitch deck profesional (50 créditos)'
+                    ],
+                    'growth_unlock': '🚀 Con Growth Plan: Encuentra 20+ inversores angel perfectos para ideas',
+                    'cta': '¿Quieres que busque inversores angel para tu idea ahora?'
+                },
+                'en': {
+                    'current': '💡 Idea Stage',
+                    'urgent_action': '⚡ IMMEDIATE ACTION: Validate your idea in 48h',
+                    'free_steps': [
+                        '✅ Define the problem (Chat with me)',
+                        '✅ Identify 10 early adopters',
+                        '❌ Find angel investors (Requires Growth)',
+                        '❌ Generate professional pitch deck (50 credits)'
+                    ],
+                    'growth_unlock': '🚀 With Growth Plan: Find 20+ perfect angel investors for ideas',
+                    'cta': 'Want me to find angel investors for your idea now?'
+                }
+            },
+            'mvp': {
+                'es': {
+                    'current': '🚀 Fase MVP',
+                    'urgent_action': '⚡ CRÍTICO: Necesitas tracción ANTES de buscar inversión',
+                    'free_steps': [
+                        '✅ Conseguir primeros 100 usuarios',
+                        '✅ Medir retención semanal',
+                        '❌ Buscar VCs seed stage (Requiere Growth)',
+                        '❌ Plan financiero profesional (70 créditos)'
+                    ],
+                    'growth_unlock': '🎯 Con Growth: 20+ VCs que invierten en MVPs sin revenue',
+                    'cta': 'Busco VCs que inviertan en MVPs como el tuyo. ¿Empezamos?'
+                },
+                'en': {
+                    'current': '🚀 MVP Stage',
+                    'urgent_action': '⚡ CRITICAL: You need traction BEFORE seeking investment',
+                    'free_steps': [
+                        '✅ Get first 100 users',
+                        '✅ Measure weekly retention',
+                        '❌ Find seed stage VCs (Requires Growth)',
+                        '❌ Professional financial model (70 credits)'
+                    ],
+                    'growth_unlock': '🎯 With Growth: 20+ VCs that invest in pre-revenue MVPs',
+                    'cta': 'I can find VCs that invest in MVPs like yours. Start now?'
+                }
+            },
+            'seed': {
+                'es': {
+                    'current': '💰 Fase Seed',
+                    'urgent_action': '⚡ MOMENTO CLAVE: Series A en 12-18 meses',
+                    'free_steps': [
+                        '✅ Escalar a €1M ARR',
+                        '✅ Contratar primeros 5 empleados',
+                        '❌ Buscar fondos Series A (Requiere Growth)',
+                        '❌ Buscar CTOs/CMOs (Requiere Growth)'
+                    ],
+                    'growth_unlock': '💎 Con Growth: Encuentra Series A + Empleados clave de fondos top',
+                    'cta': '¿Necesitas Series A o un CTO? Puedo buscar ambos.'
+                },
+                'en': {
+                    'current': '💰 Seed Stage',
+                    'urgent_action': '⚡ KEY MOMENT: Series A in 12-18 months',
+                    'free_steps': [
+                        '✅ Scale to $1M ARR',
+                        '✅ Hire first 5 employees',
+                        '❌ Find Series A funds (Requires Growth)',
+                        '❌ Find CTOs/CMOs (Requires Growth)'
+                    ],
+                    'growth_unlock': '💎 With Growth: Find Series A + Key employees from top funds',
+                    'cta': 'Need Series A or a CTO? I can find both.'
+                }
+            },
+            'corporate': {
+                'es': {
+                    'current': '🏢 Corporación Establecida',
+                    'urgent_action': '⚡ OPORTUNIDAD: Innovación corporativa',
+                    'free_steps': [
+                        '✅ Identificar nuevas verticales',
+                        '✅ Estrategia de innovación',
+                        '❌ Corporate VCs estratégicos (Pro Plan)',
+                        '❌ M&A targets automático (Pro Plan)'
+                    ],
+                    'growth_unlock': '🎯 Con Pro: Outreach automatizado a partners estratégicos',
+                    'cta': '¿Buscamos corporate VCs o targets de adquisición?'
+                },
+                'en': {
+                    'current': '🏢 Established Corporation',
+                    'urgent_action': '⚡ OPPORTUNITY: Corporate innovation',
+                    'free_steps': [
+                        '✅ Identify new verticals',
+                        '✅ Innovation strategy',
+                        '❌ Strategic corporate VCs (Pro Plan)',
+                        '❌ Automated M&A targets (Pro Plan)'
+                    ],
+                    'growth_unlock': '🎯 With Pro: Automated outreach to strategic partners',
+                    'cta': 'Should we find corporate VCs or acquisition targets?'
+                }
+            }
         }
-    }
-    
-    return roadmaps.get(stage, roadmaps['idea'])
+        
+        # Seleccionar roadmap según stage
+        roadmap_key = 'corporate' if stage == 'series_b_plus' else stage
+        if roadmap_key not in roadmaps:
+            roadmap_key = 'idea'
+            
+        roadmap = roadmaps[roadmap_key].get(user_language, roadmaps[roadmap_key]['en'])
+        
+        # Si es usuario FREE, añadir urgencia
+        if user_plan == 'free':
+            roadmap['upgrade_urgency'] = {
+                'es': '⏰ Usuarios Growth encuentran inversores 3x más rápido',
+                'en': '⏰ Growth users find investors 3x faster'
+            }.get(user_language, '⏰ Growth users find investors 3x faster')
+        
+        return roadmap
 
     def _format_recent_conversations(self, conversations):
         """Formatea conversaciones recientes para contexto"""
@@ -2846,16 +2951,10 @@ def chat_with_bot(user):
 # ============================================================================
 #   SI DETECTA GENERACIÓN DE DOCUMENTO - MANEJAR POR SEPARADO
 # ============================================================================
-        if wants_document and not wants_investor_search:  # Solo si NO quiere inversores
-            print(f"📄 Usuario quiere generar documento!")
-    
-    # Identificar qué documento quiere
-        document_type = identify_document_type(user_message, detected_language)
-    
         if not document_type:
-        # Preguntar qué documento quiere
-            ask_messages = {
-            'es': """¡Perfecto! ¿Qué documento necesitas?
+                # Preguntar qué documento quiere
+                ask_messages = {
+                    'es': """¡Perfecto! ¿Qué documento necesitas?
 
 📊 **Pitch Deck** - Presentación para inversores
 📋 **Plan de Negocios** - Estrategia completa 
@@ -2863,8 +2962,8 @@ def chat_with_bot(user):
 💰 **Modelo Financiero** - Proyecciones y números
 
 Solo dime cuál prefieres y lo generaré profesionalmente.""",
-            
-            'en': """Perfect! Which document do you need?
+                    
+                    'en': """Perfect! Which document do you need?
 
 📊 **Pitch Deck** - Presentation for investors
 📋 **Business Plan** - Complete strategy
@@ -2872,19 +2971,35 @@ Solo dime cuál prefieres y lo generaré profesionalmente.""",
 💰 **Financial Model** - Projections and numbers
 
 Just tell me which one and I'll generate it professionally."""
-        }
-        
-        return jsonify({
-            'success': True,
-            'bot': 'interactive_mentor',
-            'response': ask_messages.get(detected_language, ask_messages['en']),
-            'credits_charged': 0,
-            'credits_remaining': get_user_credits(user['id']),
-            'session_id': session_id,
-            'project_id': project_id,
-            'detected_language': detected_language,
-            'awaiting_document_choice': True
-        })
+                }
+                
+                return jsonify({
+                    'success': True,
+                    'bot': 'interactive_mentor',
+                    'response': ask_messages.get(detected_language, ask_messages['en']),
+                    'credits_charged': 0,
+                    'credits_remaining': get_user_credits(user['id']),
+                    'session_id': session_id,
+                    'project_id': project_id,
+                    'detected_language': detected_language,
+                    'awaiting_document_choice': True
+                })
+            
+            # Generar documento profesional
+            doc_response = generate_professional_document_in_chat(
+                user_id=user['id'],
+                project_id=project_id,
+                document_type=document_type,
+                user_context=enhanced_context,
+                user_language=detected_language
+            )
+            
+            # Añadir IDs de sesión y proyecto
+            doc_response['session_id'] = session_id
+            doc_response['project_id'] = project_id
+            doc_response['detected_language'] = detected_language
+            
+            return jsonify(doc_response)
     
     # Generar documento profesional
     doc_response = generate_professional_document_in_chat(
@@ -3159,7 +3274,21 @@ There was a technical problem executing the search.
                 'upgrade_needed': True,
                 'detected_language': detected_language
             }), 402
-        
+
+
+        # INYECTAR ROADMAP INTELIGENTE EN CONTEXTO
+        if user_context.get('business_context', {}).get('stage'):
+            roadmap = bot_manager.get_startup_roadmap(user_context)
+            
+            # Solo mostrar roadmap cada 5 mensajes o si preguntan por "next steps"
+            message_count = user_context.get('total_interactions', 0)
+            asks_for_guidance = any(word in user_message.lower() for word in 
+                ['next', 'siguiente', 'paso', 'step', 'ahora', 'now', 'qué hago', 'what do'])
+            
+            if message_count % 5 == 0 or asks_for_guidance:
+                user_context['show_roadmap'] = True
+                user_context['roadmap'] = roadmap
+                         
         # PROCESAR CON BOT MANAGER
         response = bot_manager.process_user_request(
             user_input=user_message,
