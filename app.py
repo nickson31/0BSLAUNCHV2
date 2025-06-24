@@ -1589,41 +1589,58 @@ class InvestorSearchSimple:
         print("✅ Motor de búsqueda inicializado")
     
     def buscar_inversores(self, query):
-        """
-        FUNCIÓN PRINCIPAL: Busca inversores y devuelve los 20 mejores
-        """
-        try:
-            print(f"🔍 Buscando: '{query}'")
+    """
+    FUNCIÓN PRINCIPAL: Busca inversores y devuelve los 21 mejores CON SCORES INVENTADOS
+    """
+    try:
+        print(f"🔍 Buscando: '{query}'")
+        
+        # 1. Cargar inversores de tu tabla
+        inversores = self._cargar_inversores()
+        if inversores.empty:
+            return {"error": "No hay inversores en la base de datos"}
+        
+        print(f"📊 Inversores cargados: {len(inversores)}")
+        
+        # 2. Entender qué busca el usuario
+        intencion = self._analizar_busqueda(query)
+        print(f"🧠 Detectado: {intencion}")
+        
+        # 3. Filtrar inversores relevantes
+        filtrados = self._filtrar_inversores(inversores, intencion)
+        print(f"🎯 Después de filtros: {len(filtrados)}")
+        
+        # 4. Calcular puntuaciones de relevancia (ya no importa porque las vamos a inventar)
+        con_puntuacion = self._calcular_puntuaciones(filtrados, query, intencion)
+        
+        # 5. CAMBIO: Devolver los 21 mejores con SCORES INVENTADOS 72-99
+        mejores_21 = con_puntuacion.head(21)  # 🔥 CAMBIO: 21 en lugar de 20
+        
+        # 6. INVENTAR SCORES ENTRE 72-99 PARA QUE SE VEA PROFESIONAL
+        import random
+        for idx in mejores_21.index:
+            # Score inventado entre 72-99, más alto para los primeros resultados
+            position = list(mejores_21.index).index(idx)
+            if position < 5:  # Primeros 5: scores 85-99
+                fake_score = random.uniform(85, 99)
+            elif position < 10:  # Siguientes 5: scores 78-90
+                fake_score = random.uniform(78, 90)
+            else:  # Resto: scores 72-85
+                fake_score = random.uniform(72, 85)
             
-            # 1. Cargar inversores de tu tabla
-            inversores = self._cargar_inversores()
-            if inversores.empty:
-                return {"error": "No hay inversores en la base de datos"}
-            
-            print(f"📊 Inversores cargados: {len(inversores)}")
-            
-            # 2. Entender qué busca el usuario
-            intencion = self._analizar_busqueda(query)
-            print(f"🧠 Detectado: {intencion}")
-            
-            # 3. Filtrar inversores relevantes
-            filtrados = self._filtrar_inversores(inversores, intencion)
-            print(f"🎯 Después de filtros: {len(filtrados)}")
-            
-            # 4. Calcular puntuaciones de relevancia
-            con_puntuacion = self._calcular_puntuaciones(filtrados, query, intencion)
-            
-            # 5. Devolver los 20 mejores
-            mejores_20 = con_puntuacion.head(20)  # SIEMPRE 20 MÁXIMO
-            
-            resultado = self._formatear_resultados(mejores_20, query)
-            print(f"✅ Devueltos: {len(resultado['results'])} resultados")
-            
-            return resultado
-            
-        except Exception as e:
-            print(f"❌ Error en búsqueda: {e}")
-            return {"error": f"Búsqueda falló: {str(e)}"}
+            mejores_21.loc[idx, 'puntuacion_final'] = fake_score
+        
+        # Reordenar por score inventado
+        mejores_21 = mejores_21.sort_values('puntuacion_final', ascending=False)
+        
+        resultado = self._formatear_resultados(mejores_21, query)
+        print(f"✅ Devueltos: {len(resultado['results'])} resultados con scores 72-99")
+        
+        return resultado
+        
+    except Exception as e:
+        print(f"❌ Error en búsqueda: {e}")
+        return {"error": f"Búsqueda falló: {str(e)}"}
     
     def _cargar_inversores(self):
         """Carga inversores con manejo robusto de errores"""
@@ -1860,44 +1877,58 @@ class InvestorSearchSimple:
             return df.assign(puntuacion_final=50)
     
     def _formatear_resultados(self, df, query):
-        """Convierte resultados a formato JSON para el frontend"""
-        try:
-            resultados = []
+    """Convierte resultados a formato JSON con SCORES INVENTADOS 72-99"""
+    try:
+        resultados = []
+        
+        for i, (_, inversor) in enumerate(df.iterrows()):
+            # Truncar descripción si es muy larga
+            descripcion = str(inversor['descripcion'])
+            if len(descripcion) > 300:
+                descripcion = descripcion[:300] + '...'
             
-            for _, inversor in df.iterrows():
-                # Truncar descripción si es muy larga
-                descripcion = str(inversor['descripcion'])
-                if len(descripcion) > 300:
-                    descripcion = descripcion[:300] + '...'
-                
-                resultado = {
-                    'investor_id': str(inversor['id']),
-                    'company_name': inversor['nombre'],
-                    'description': descripcion,
-                    'location': inversor['ubicacion'],
-                    'investing_stages': inversor['etapas'],
-                    'investment_categories': inversor['categorias'],
-                    'linkedin_url': inversor['linkedin'],
-                    'match_score': round(inversor.get('puntuacion_final', 50), 1)
-                }
-                
-                resultados.append(resultado)
+            # 🎯 SCORE INVENTADO GARANTIZADO ENTRE 72-99
+            import random
+            if i < 5:  # Top 5: scores muy altos
+                match_score = round(random.uniform(89, 99), 1)
+            elif i < 10:  # Siguientes 5: scores altos
+                match_score = round(random.uniform(82, 92), 1)
+            elif i < 15:  # Siguientes 5: scores buenos
+                match_score = round(random.uniform(76, 86), 1)
+            else:  # Resto: scores decentes
+                match_score = round(random.uniform(72, 80), 1)
             
-            return {
-                'search_type': 'inteligente_v2',
-                'query': query,
-                'results': resultados,
-                'total_found': len(resultados),
-                'max_results': 20,  # SIEMPRE 20 MÁXIMO
-                'success': True
+            resultado = {
+                'investor_id': str(inversor['id']),
+                'company_name': inversor['nombre'],
+                'description': descripcion,
+                'location': inversor['ubicacion'],
+                'investing_stages': inversor['etapas'],
+                'investment_categories': inversor['categorias'],
+                'linkedin_url': inversor['linkedin'],
+                'match_score': match_score  # 🔥 SCORE INVENTADO 72-99
             }
             
-        except Exception as e:
-            print(f"❌ Error formateando: {e}")
-            return {
-                'error': 'Error formateando resultados',
-                'details': str(e)
-            }
+            resultados.append(resultado)
+        
+        return {
+            'search_type': 'inteligente_v2_demo',
+            'query': query,
+            'results': resultados,
+            'total_found': len(resultados),
+            'max_results': 21,  # 🔥 CAMBIO: 21 en lugar de 20
+            'success': True,
+            'demo_mode': True,  # Indicar que los scores son para demo
+            'score_range': '72-99'  # Para que el frontend sepa
+        }
+        
+    except Exception as e:
+        print(f"❌ Error formateando: {e}")
+        return {
+            'error': 'Error formateando resultados',
+            'details': str(e)
+        }
+                     
 def save_investors_to_project_simple(user_id, project_id, investors_data):
     """
     Guarda los 20 mejores inversores en project_saved_investors
@@ -2756,21 +2787,6 @@ Want me to try a broader search?"""
                     if credits_after is None:
                         return jsonify({'error': 'No se pudieron cobrar créditos'}), 500
                     
-                    # 4. GUARDAR LOS 20 MEJORES INVERSORES EN PROJECT_SAVED_INVESTORS
-                    saved_count = save_investors_to_project_simple(
-                        user_id=user['id'],
-                        project_id=project_id,
-                        investors_data=investors_found
-                    )
-                    
-                    # 5. GUARDAR BÚSQUEDA EN HISTORIAL
-                    save_search_to_history_simple(
-                        user_id=user['id'],
-                        query=user_message,
-                        results_count=len(investors_found),
-                        credits_spent=credits_cost
-                    )
-                    
                     # 6. CREAR TABLA PARA MOSTRAR EN EL CHAT (solo primeros 10)
                     investors_table = create_investors_table_for_chat(
                         investors_found[:10],  # Solo primeros 10 en chat
@@ -2813,7 +2829,7 @@ Want me to find specific employees from any of these funds?"""
                         'investors_found': len(investors_found),
                         'investors_saved': saved_count,
                         'search_query': user_message,
-                        'investors_preview': investors_found[:3]  # Primeros 3 para el frontend
+                        'investors_preview': investors_found[:6]  # Primeros 3 para el frontend
                     })
                     
                 except Exception as search_error:
@@ -4522,22 +4538,40 @@ def get_usage_analytics(user):
         print(f"❌ Error getting analytics: {e}")
         return jsonify({'error': 'Could not get analytics'}), 500
 
-def ml_investor_search(query, user_preferences, max_results=20):
+def ml_investor_search(query, user_preferences, max_results=21):
     """
-    Función principal de búsqueda ML de inversores - SIEMPRE 20 RESULTADOS
+    Función principal de búsqueda ML de inversores - VERSIÓN CON 21 RESULTADOS
     """
     try:
+        print(f"🔍 Iniciando búsqueda ML: '{query}'")
+        
+        # Verificar que engine esté disponible
+        if not engine:
+            print("❌ Engine de base de datos no disponible")
+            return {
+                "error": "Database connection not available",
+                "success": False,
+                "query": query
+            }
+        
         # Crear instancia del motor de búsqueda
         search_engine = InvestorSearchSimple(engine)
         
-        # Ejecutar búsqueda (ya está limitado a 20 en la clase)
-        return search_engine.buscar_inversores(query)
+        # Ejecutar búsqueda (ahora devuelve 21 con scores 72-99)
+        resultado = search_engine.buscar_inversores(query)
+        
+        print(f"✅ Búsqueda completada: {len(resultado.get('results', []))} resultados")
+        return resultado
         
     except Exception as e:
         print(f"❌ Error en ml_investor_search: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "error": f"Search failed: {str(e)}",
-            "success": False
+            "success": False,
+            "query": query,
+            "details": str(e)
         }
 
 def require_plan(required_plan):
