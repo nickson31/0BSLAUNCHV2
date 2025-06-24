@@ -38,6 +38,9 @@ from werkzeug.datastructures import FileStorage
 import PyPDF2
 import docx
 import mimetypes
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Google Auth
 from google.oauth2 import id_token
@@ -1479,6 +1482,296 @@ class BotManager:
 # Actualizar la instancia global
 bot_manager = BotManager()
 
+class InvestorSearchSimple:
+    """
+    Búsqueda inteligente de inversores - VERSIÓN SIMPLE
+    Siempre devuelve máximo 20 resultados ordenados por relevancia
+    """
+    
+    def __init__(self, engine):
+        self.engine = engine
+        self.vectorizer = TfidfVectorizer(stop_words='english', max_features=300)
+        print("✅ Motor de búsqueda inicializado")
+    
+    def buscar_inversores(self, query):
+        """
+        FUNCIÓN PRINCIPAL: Busca inversores y devuelve los 20 mejores
+        """
+        try:
+            print(f"🔍 Buscando: '{query}'")
+            
+            # 1. Cargar inversores de tu tabla
+            inversores = self._cargar_inversores()
+            if inversores.empty:
+                return {"error": "No hay inversores en la base de datos"}
+            
+            print(f"📊 Inversores cargados: {len(inversores)}")
+            
+            # 2. Entender qué busca el usuario
+            intencion = self._analizar_busqueda(query)
+            print(f"🧠 Detectado: {intencion}")
+            
+            # 3. Filtrar inversores relevantes
+            filtrados = self._filtrar_inversores(inversores, intencion)
+            print(f"🎯 Después de filtros: {len(filtrados)}")
+            
+            # 4. Calcular puntuaciones de relevancia
+            con_puntuacion = self._calcular_puntuaciones(filtrados, query, intencion)
+            
+            # 5. Devolver los 20 mejores
+            mejores_20 = con_puntuacion.head(20)  # SIEMPRE 20 MÁXIMO
+            
+            resultado = self._formatear_resultados(mejores_20, query)
+            print(f"✅ Devueltos: {len(resultado['results'])} resultados")
+            
+            return resultado
+            
+        except Exception as e:
+            print(f"❌ Error en búsqueda: {e}")
+            return {"error": f"Búsqueda falló: {str(e)}"}
+    
+    def _cargar_inversores(self):
+        """Carga inversores de TU tabla existente en Supabase"""
+        try:
+            query = """
+            SELECT 
+                id,
+                "Company_Name" as nombre,
+                "Company_Description" as descripcion,
+                "Company_Location" as ubicacion,
+                "Investing_Stage" as etapas,
+                "Investment_Categories" as categorias,
+                "Company_Linkedin" as linkedin
+            FROM investors
+            WHERE "Company_Name" IS NOT NULL 
+            AND "Company_Name" != ''
+            LIMIT 3000
+            """
+            
+            df = pd.read_sql(query, self.engine)
+            
+            # Rellenar valores vacíos
+            df = df.fillna('')
+            
+            # Crear texto combinado para búsqueda
+            df['texto_busqueda'] = (
+                df['nombre'].astype(str) + ' ' +
+                df['descripcion'].astype(str) + ' ' +
+                df['ubicacion'].astype(str) + ' ' +
+                df['etapas'].astype(str) + ' ' +
+                df['categorias'].astype(str)
+            ).str.lower()
+            
+            return df
+            
+        except Exception as e:
+            print(f"❌ Error cargando inversores: {e}")
+            return pd.DataFrame()
+    
+    def _analizar_busqueda(self, query):
+        """Usa Gemini para entender qué busca el usuario"""
+        try:
+            prompt = f"""
+            Analiza esta búsqueda de inversores: "{query}"
+            
+            Extrae información y devuelve SOLO este JSON (sin explicaciones):
+            {{
+                "industrias": ["lista de industrias mencionadas"],
+                "etapas": ["lista de etapas de inversión"],
+                "ubicaciones": ["lista de ubicaciones mencionadas"]
+            }}
+            
+            Ejemplos:
+            "fintech seed Madrid" → {{"industrias": ["fintech"], "etapas": ["seed"], "ubicaciones": ["madrid"]}}
+            "AI startups London" → {{"industrias": ["ai"], "etapas": [], "ubicaciones": ["london"]}}
+            """
+            
+            model = genai.GenerativeModel(MODEL_NAME)
+            response = model.generate_content(
+                prompt,
+                generation_config={"temperature": 0.1, "max_output_tokens": 200}
+            )
+            
+            # Extraer JSON de la respuesta
+            import re
+            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group(0))
+            
+            # Si no funciona, devolver vacío
+            return {"industrias": [], "etapas": [], "ubicaciones": []}
+            
+        except Exception as e:
+            print(f"❌ Error analizando búsqueda: {e}")
+            return {"industrias": [], "etapas": [], "ubicaciones": []}
+    
+    def _filtrar_inversores(self, df, intencion):
+        """Filtra inversores por ubicación, industria y etapa"""
+        try:
+            filtrado = df.copy()
+            total_original = len(filtrado)
+            
+            # Filtro por ubicaciones
+            if intencion.get('ubicaciones'):
+                mascara_ubicacion = pd.Series([False] * len(filtrado))
+                
+                for ubicacion in intencion['ubicaciones']:
+                    # Buscar en texto de búsqueda
+                    mascara_ubicacion |= filtrado['texto_busqueda'].str.contains(
+                        ubicacion.lower(), case=False, na=False
+                    )
+                
+                # Solo aplicar si encuentra suficientes resultados
+                if mascara_ubicacion.sum() >= 5:
+                    filtrado = filtrado[mascara_ubicacion]
+                    print(f"  🌍 Filtro ubicación: {total_original} → {len(filtrado)}")
+            
+            # Filtro por industrias
+            if intencion.get('industrias'):
+                mascara_industria = pd.Series([False] * len(filtrado))
+                
+                for industria in intencion['industrias']:
+                    mascara_industria |= filtrado['texto_busqueda'].str.contains(
+                        industria.lower(), case=False, na=False
+                    )
+                
+                if mascara_industria.sum() >= 3:
+                    filtrado = filtrado[mascara_industria]
+                    print(f"  🏭 Filtro industria: {len(filtrado)} resultados")
+            
+            # Filtro por etapas
+            if intencion.get('etapas'):
+                mascara_etapa = pd.Series([False] * len(filtrado))
+                
+                for etapa in intencion['etapas']:
+                    mascara_etapa |= filtrado['texto_busqueda'].str.contains(
+                        etapa.lower(), case=False, na=False
+                    )
+                
+                if mascara_etapa.sum() >= 3:
+                    filtrado = filtrado[mascara_etapa]
+                    print(f"  🎯 Filtro etapa: {len(filtrado)} resultados")
+            
+            # Si quedan muy pocos resultados, usar todos
+            if len(filtrado) < 10:
+                print("  ⚠️ Pocos resultados, usando todos los inversores")
+                return df
+            
+            return filtrado
+            
+        except Exception as e:
+            print(f"❌ Error filtrando: {e}")
+            return df
+    
+    def _calcular_puntuaciones(self, df, query, intencion):
+        """Calcula qué tan relevante es cada inversor"""
+        try:
+            if len(df) == 0:
+                return df
+            
+            # === PUNTUACIÓN SEMÁNTICA (qué tan similar es el texto) ===
+            documentos = [query] + df['texto_busqueda'].tolist()
+            
+            # Crear vectores TF-IDF
+            matriz_tfidf = self.vectorizer.fit_transform(documentos)
+            
+            # Calcular similitud entre query y cada inversor
+            vector_query = matriz_tfidf[0:1]
+            vectores_inversores = matriz_tfidf[1:]
+            
+            similitudes = cosine_similarity(vector_query, vectores_inversores).flatten()
+            
+            # === PUNTUACIÓN POR PALABRAS CLAVE EXACTAS ===
+            puntuaciones_keywords = []
+            
+            for _, inversor in df.iterrows():
+                puntos = 0
+                texto = inversor['texto_busqueda']
+                
+                # +5 puntos por cada ubicación que coincida
+                for ubicacion in intencion.get('ubicaciones', []):
+                    if ubicacion.lower() in texto:
+                        puntos += 5
+                
+                # +8 puntos por cada industria que coincida (más importante)
+                for industria in intencion.get('industrias', []):
+                    if industria.lower() in texto:
+                        puntos += 8
+                
+                # +6 puntos por cada etapa que coincida
+                for etapa in intencion.get('etapas', []):
+                    if etapa.lower() in texto:
+                        puntos += 6
+                
+                puntuaciones_keywords.append(puntos)
+            
+            # === COMBINAR PUNTUACIONES ===
+            df = df.copy()
+            
+            # Normalizar similitudes a 0-100
+            df['puntuacion_semantica'] = similitudes * 100
+            
+            # Convertir keywords a 0-100
+            puntos_array = np.array(puntuaciones_keywords)
+            if puntos_array.max() > 0:
+                df['puntuacion_keywords'] = (puntos_array / puntos_array.max()) * 100
+            else:
+                df['puntuacion_keywords'] = 0
+            
+            # Puntuación final: 40% semántica + 60% keywords
+            df['puntuacion_final'] = (
+                df['puntuacion_semantica'] * 0.4 + 
+                df['puntuacion_keywords'] * 0.6
+            )
+            
+            # Ordenar por puntuación final (mejores primero)
+            return df.sort_values('puntuacion_final', ascending=False)
+            
+        except Exception as e:
+            print(f"❌ Error calculando puntuaciones: {e}")
+            # Si falla, devolver con puntuación por defecto
+            return df.assign(puntuacion_final=50)
+    
+    def _formatear_resultados(self, df, query):
+        """Convierte resultados a formato JSON para el frontend"""
+        try:
+            resultados = []
+            
+            for _, inversor in df.iterrows():
+                # Truncar descripción si es muy larga
+                descripcion = str(inversor['descripcion'])
+                if len(descripcion) > 300:
+                    descripcion = descripcion[:300] + '...'
+                
+                resultado = {
+                    'investor_id': str(inversor['id']),
+                    'company_name': inversor['nombre'],
+                    'description': descripcion,
+                    'location': inversor['ubicacion'],
+                    'investing_stages': inversor['etapas'],
+                    'investment_categories': inversor['categorias'],
+                    'linkedin_url': inversor['linkedin'],
+                    'match_score': round(inversor.get('puntuacion_final', 50), 1)
+                }
+                
+                resultados.append(resultado)
+            
+            return {
+                'search_type': 'inteligente_v2',
+                'query': query,
+                'results': resultados,
+                'total_found': len(resultados),
+                'max_results': 20,  # SIEMPRE 20 MÁXIMO
+                'success': True
+            }
+            
+        except Exception as e:
+            print(f"❌ Error formateando: {e}")
+            return {
+                'error': 'Error formateando resultados',
+                'details': str(e)
+            }
+
 # ==============================================================================
 #           ROUTES
 # ==============================================================================
@@ -2395,6 +2688,85 @@ def upgrade_subscription(user):
         print(f"Error upgrading subscription: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/search/investors', methods=['POST'])
+@require_auth
+@require_plan('growth')
+def search_investors(user):
+    """
+    Endpoint de búsqueda de inversores - SIEMPRE 20 RESULTADOS MÁXIMO
+    """
+    try:
+        data = request.get_json()
+        query = data.get('query', '').strip()
+        
+        # Validar query
+        if not query or len(query) < 3:
+            return jsonify({
+                'error': 'Query demasiado corto (mínimo 3 caracteres)'
+            }), 400
+        
+        print(f"🔍 Búsqueda de {user['email']}: '{query}'")
+        
+        # CRÉDITOS PARA EXACTAMENTE 20 RESULTADOS
+        creditos_necesarios = 20 * CREDIT_COSTS['investor_search_result']
+        creditos_usuario = get_user_credits(user['id'])
+        
+        if creditos_usuario < creditos_necesarios:
+            return jsonify({
+                'error': 'insufficient_credits',
+                'required': creditos_necesarios,
+                'available': creditos_usuario,
+                'message': f'Necesitas {creditos_necesarios} créditos para buscar inversores'
+            }), 402
+        
+        # Preparar contexto para la búsqueda
+        contexto_usuario = {
+            'user_id': user['id'],
+            'user_plan': user['plan'],
+            'preferences': data.get('preferences', {})
+        }
+        
+        # EJECUTAR BÚSQUEDA (SIEMPRE MÁXIMO 20)
+        import time
+        inicio = time.time()
+        
+        resultados = ml_investor_search(query, contexto_usuario, 20)
+        
+        tiempo_procesamiento = round((time.time() - inicio) * 1000)  # en milisegundos
+        
+        # Verificar si hubo error
+        if 'error' in resultados:
+            return jsonify(resultados), 500
+        
+        # COBRAR CRÉDITOS por resultados encontrados
+        resultados_encontrados = len(resultados.get('results', []))
+        creditos_a_cobrar = resultados_encontrados * CREDIT_COSTS['investor_search_result']
+        
+        exito_cobro = charge_credits(user['id'], creditos_a_cobrar)
+        
+        if not exito_cobro:
+            return jsonify({
+                'error': 'No se pudieron cobrar los créditos'
+            }), 500
+        
+        # Añadir información de créditos y timing
+        resultados['credits_charged'] = creditos_a_cobrar
+        resultados['credits_remaining'] = get_user_credits(user['id'])
+        resultados['processing_time_ms'] = tiempo_procesamiento
+        
+        print(f"✅ Búsqueda completada: {resultados_encontrados} resultados, {creditos_a_cobrar} créditos, {tiempo_procesamiento}ms")
+        
+        return jsonify(resultados)
+        
+    except Exception as e:
+        print(f"❌ Error en endpoint de búsqueda: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'error': 'Error en el servicio de búsqueda',
+            'details': str(e)
+        }), 500
+                                 
 # ==============================================================================
 #           ADMIN ENDPOINTS
 # ==============================================================================
