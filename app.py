@@ -161,8 +161,8 @@ CREDIT_COSTS = {
 SUBSCRIPTION_PLANS = {
     "free": {
         "name": "Free",
-        "credits_monthly": 100,
-        "launch_credits": 100,
+        "credits_monthly": 10000,
+        "launch_credits": 10000,
         "features": {
             "bots_access": True,
             "investor_search": False,
@@ -174,8 +174,8 @@ SUBSCRIPTION_PLANS = {
     },
     "growth": {
         "name": "Growth",
-        "credits_monthly": 10000,
-        "launch_credits": 100000,
+        "credits_monthly": 100000,
+        "launch_credits": 1000000,
         "features": {
             "bots_access": True,
             "investor_search": True,
@@ -394,7 +394,7 @@ def create_user(email, password=None, first_name="", last_name="", auth_provider
                 text("""
                     INSERT INTO users (
                         id, email, password_hash, first_name, last_name,
-                        subscription_plan, credits, auth_provider, google_id, 
+                        plan, credits, auth_provider, google_id, 
                         is_active, is_admin, created_at, updated_at
                     ) VALUES (
                         :id, :email, :password_hash, :first_name, :last_name,
@@ -577,7 +577,7 @@ def update_subscription_plan(user_id, new_plan):
             conn.execute(
                 text("""
                     UPDATE users 
-                    SET subscription_plan = :plan,
+                    SET plan = :plan,
                         credits = credits + :additional_credits,
                         updated_at = NOW()
                     WHERE id = :user_id
@@ -698,7 +698,6 @@ def save_neural_interaction(user_id, interaction_data):
         import traceback
         traceback.print_exc()
 
-
 def check_and_generate_session_title(session_id, user_id, interaction_data):
     """Genera título para la sesión si es la primera interacción"""
     try:
@@ -761,7 +760,7 @@ def generate_chat_title_with_gemini(user_input, bot_response):
             - "Análisis Competencia EdTech"
             - "Modelo Financiero B2B"
             
-            Responde SOLO con el título en español, sin comillas ni explicaciones:
+            Responde SOLO con el título en el idioma de input/prompt del usuario, si es español, español, si es chino, chino, si es inglés, inglés, sin comillas ni explicaciones:
             """,
             
             'en': f"""
@@ -778,7 +777,7 @@ def generate_chat_title_with_gemini(user_input, bot_response):
             - "EdTech Competition Analysis"
             - "B2B Financial Model"
             
-            Respond ONLY with the title in English, no quotes or explanations:
+            Respond ONLY with the title in the language of the user's input/prompt, if the conversation is in English, English, if the user talks in Spanish, Spanish, no quotes or explanations:
             """
         }
         
@@ -1100,21 +1099,45 @@ def detect_user_language_with_gemini(text):
         print(f"❌ Error detecting language with Gemini: {e}")
         # Fallback to simple detection if Gemini fails
         return detect_user_language_simple_fallback(text)
+
+def detect_user_language_simple_fallback(text):
+    """Detección simple de idioma como fallback"""
+    spanish_keywords = ['hola', 'como', 'que', 'para', 'por', 'con', 'esto', 'esta', 'quiero', 'necesito', 'puedo', 'ayuda']
+    english_keywords = ['hello', 'how', 'what', 'for', 'with', 'this', 'want', 'need', 'can', 'help', 'please']
+    
+    text_lower = text.lower()
+    
+    spanish_count = sum(1 for word in spanish_keywords if word in text_lower)
+    english_count = sum(1 for word in english_keywords if word in text_lower)
+    
+    if spanish_count > english_count:
+        return 'es'
+    else:
+        return 'en'
+
+def detect_user_language(text):
+    """Función principal de detección de idioma - usa Gemini con fallback"""
+    return detect_user_language_with_gemini(text)
         
 def get_enhanced_context_for_chat(user, session_id, project_id, data):
-    """Obtiene contexto mejorado para el chat - VERSIÓN CORRECTA"""
+    """Obtiene contexto mejorado para el chat - CON DETECCIÓN DE IDIOMA GEMINI"""
     try:
         # Obtener contexto del proyecto
         project_context = get_project_context_for_chat(user['id'], project_id)
         
+        # DETECTAR IDIOMA CON GEMINI
+        user_message = data.get('message', '')
+        detected_language = detect_user_language_with_gemini(user_message)
+        
         # Contexto base
         enhanced_context = {
             'user_id': user['id'],
-            'user_plan': user.get('plan', 'free'),  # usar 'plan' no 'subscription_plan'
+            'user_plan': user.get('plan', 'free'),
             'session_id': session_id,
             'project_id': project_id,
             'user_credits_before': get_user_credits(user['id']),
-            'user_language': detect_user_language(data.get('message', '')),  # DETECTAR IDIOMA
+            'user_language': detected_language,  # IDIOMA DETECTADO POR GEMINI
+            'user_message': user_message,
             **data.get('context', {}),
             **project_context
         }
@@ -1126,7 +1149,8 @@ def get_enhanced_context_for_chat(user, session_id, project_id, data):
             'user_id': user['id'],
             'user_plan': user.get('plan', 'free'),
             'session_id': session_id,
-            'project_id': project_id
+            'project_id': project_id,
+            'user_language': 'en'  # Default language
         }
         
 def get_project_context_for_chat(user_id, project_id):
@@ -1160,13 +1184,13 @@ def get_project_context_for_chat(user_id, project_id):
                 {"user_id": user_id, "project_id": project_id}
             ).fetchall()
             
-            # Obtener documentos del proyecto usando el extract function que ya existe en tu DB
+            # Obtener documentos del proyecto
             project_docs = conn.execute(
                 text("""
                     SELECT document_type, title, created_at 
                     FROM generated_documents 
                     WHERE user_id = :user_id 
-                    AND extract_project_id_from_metadata(metadata) = :project_id
+                    AND metadata::jsonb->>'project_id' = :project_id
                     ORDER BY created_at DESC
                 """),
                 {"user_id": user_id, "project_id": project_id}
@@ -1242,55 +1266,74 @@ def generate_context_summary(business_context, recent_chats):
         print(f"❌ Error generating context summary: {e}")
         return "Error generando resumen de contexto"
 
-def get_enhanced_context_for_chat(user, session_id, project_id, data):
-    """Obtiene contexto mejorado para el chat - CON DETECCIÓN DE IDIOMA GEMINI"""
+def detect_investor_search_intent(user_message, user_language='en'):
+    """Detecta si el usuario quiere buscar inversores usando Gemini. te daré unos ejemplos, pero tendrás que detectarlo tú mismo con tu inteligencia y criterio, sólo si lo pide explícitamente - MULTIIDIOMA"""
     try:
-        # Obtener contexto del proyecto
-        project_context = get_project_context_for_chat(user['id'], project_id)
-        
-        # DETECTAR IDIOMA CON GEMINI
-        user_message = data.get('message', '')
-        detected_language = detect_user_language_with_gemini(user_message)
-        
-        # Contexto base
-        enhanced_context = {
-            'user_id': user['id'],
-            'user_plan': user.get('plan', 'free'),
-            'session_id': session_id,
-            'project_id': project_id,
-            'user_credits_before': get_user_credits(user['id']),
-            'user_language': detected_language,  # IDIOMA DETECTADO POR GEMINI
-            'user_message': user_message,
-            **data.get('context', {}),
-            **project_context
+        detection_prompts = {
+            'es': f"""
+            Analiza si el usuario quiere buscar inversores en este mensaje:
+            "{user_message}"
+            
+            Responde SOLO con 'true' o 'false'.
+            Ejemplos que SÍ son búsqueda de inversores:
+            - "Quiero buscar inversores"
+            - "Necesito encontrar VCs"
+            - "Busca fondos de inversión"
+            - "Muéstrame inversores para fintech"
+            - "Encuentra inversores seed"
+            
+            Ejemplos que NO son búsqueda:
+            - "Cómo hacer un pitch para inversores"
+            - "Qué buscan los inversores"
+            - "Estrategia para inversores"
+            - "Prepara mi pitch deck"
+            """,
+            
+            'en': f"""
+            Analyze if the user wants to search for investors in this message:
+            "{user_message}"
+            
+            Respond ONLY with 'true' or 'false'.
+            Examples that ARE investor search:
+            - "I want to find investors"
+            - "Search for VCs"
+            - "Show me fintech investors"
+            - "Find seed funds"
+            - "Look for angel investors"
+            
+            Examples that are NOT search:
+            - "How to pitch to investors"
+            - "What do investors look for"
+            - "Investor strategy"
+            - "Prepare my pitch deck"
+            """
         }
         
-        return enhanced_context
+        prompt = detection_prompts.get(user_language, detection_prompts['en'])
+        
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(
+            prompt,
+            generation_config={
+                "temperature": 0.1,
+                "max_output_tokens": 10,
+            }
+        )
+        
+        return response.text.strip().lower() == 'true'
+        
     except Exception as e:
-        print(f"❌ Error getting enhanced context: {e}")
-        return {
-            'user_id': user['id'],
-            'user_plan': user.get('plan', 'free'),
-            'session_id': session_id,
-            'project_id': project_id,
-            'user_language': 'en'  # Default language
-        }
-
-def detect_user_language_simple_fallback(text):
-    """Detección simple de idioma como fallback"""
-    spanish_keywords = ['hola', 'como', 'que', 'para', 'por', 'con', 'esto', 'esta', 'quiero', 'necesito', 'puedo', 'ayuda']
-    english_keywords = ['hello', 'how', 'what', 'for', 'with', 'this', 'want', 'need', 'can', 'help', 'please']
-    
-    text_lower = text.lower()
-    
-    spanish_count = sum(1 for word in spanish_keywords if word in text_lower)
-    english_count = sum(1 for word in english_keywords if word in text_lower)
-    
-    if spanish_count > english_count:
-        return 'es'
-    else:
-        return 'en'
+        print(f"❌ Error detecting investor search intent: {e}")
+        # Fallback: buscar keywords
+        search_keywords = ['buscar', 'encontrar', 'search', 'find', 'muéstrame', 'show me', 'look for']
+        investor_keywords = ['inversor', 'investor', 'vc', 'fondo', 'fund', 'capital', 'angel']
         
+        message_lower = user_message.lower()
+        has_search = any(keyword in message_lower for keyword in search_keywords)
+        has_investor = any(keyword in message_lower for keyword in investor_keywords)
+        
+        return has_search and has_investor
+
 # ==============================================================================
 #           BOT SYSTEM
 # ==============================================================================
@@ -1409,7 +1452,7 @@ class BotManager:
         4. If they ask for documents (pitch deck, business plan), offer to generate them
         5. Be honest about entrepreneurship challenges
         6. Use real examples when appropriate
-        7. Adjust your response to their level (idea vs real startup)
+        7. Adjust your response to their level (idea vs real startup vs corporate company)
         8. Length: 100-800 words depending on complexity
         
         Remember: THE LANGUAGE IS CRITICAL. User language detected: {user_language}
@@ -1433,9 +1476,9 @@ class BotManager:
         
         return '\n'.join(formatted)
 
-
-# Actualizar la instancia global (ESTA LÍNEA YA EXISTE, NO LA CAMBIES)
+# Actualizar la instancia global
 bot_manager = BotManager()
+
 # ==============================================================================
 #           ROUTES
 # ==============================================================================
@@ -1512,7 +1555,7 @@ def test_auth():
 
 @app.route('/auth/register', methods=['POST'])
 def register():
-    """Registro de usuario"""
+    """Registro de usuario - CON DETECCIÓN DE IDIOMA"""
     try:
         print("🚀 Register endpoint called")
         data = request.get_json()
@@ -1522,16 +1565,41 @@ def register():
         
         print(f"📥 Received data: {data}")
         
+        # Detectar idioma del formulario (basado en el campo first_name o cualquier texto)
+        detected_language = detect_user_language(data.get('first_name', '') + ' ' + data.get('last_name', ''))
+        
+        # Mensajes de error multiidioma
+        error_messages = {
+            'es': {
+                'missing_field': 'Campo requerido faltante: {}',
+                'invalid_email': 'Formato de email inválido',
+                'email_registered': 'Email ya registrado',
+                'error_creating': 'Error creando usuario',
+                'error_token': 'Error generando token',
+                'success': 'Usuario registrado exitosamente'
+            },
+            'en': {
+                'missing_field': 'Missing required field: {}',
+                'invalid_email': 'Invalid email format',
+                'email_registered': 'Email already registered',
+                'error_creating': 'Error creating user',
+                'error_token': 'Error generating token',
+                'success': 'User registered successfully'
+            }
+        }
+        
+        msgs = error_messages.get(detected_language, error_messages['en'])
+        
         # Validar campos requeridos
         required_fields = ['email', 'password', 'first_name', 'last_name']
         for field in required_fields:
             if field not in data or not data[field]:
-                return jsonify({'error': f'Missing required field: {field}'}), 400
+                return jsonify({'error': msgs['missing_field'].format(field)}), 400
         
         # Validar formato de email
         email = data['email'].lower().strip()
         if '@' not in email or '.' not in email:
-            return jsonify({'error': 'Invalid email format'}), 400
+            return jsonify({'error': msgs['invalid_email']}), 400
         
         # Validar contraseña
         password = data['password']
@@ -1542,7 +1610,7 @@ def register():
         # Verificar si email ya existe
         existing_user = get_user_by_email(email)
         if existing_user:
-            return jsonify({'error': 'Email already registered'}), 400
+            return jsonify({'error': msgs['email_registered']}), 400
         
         # Crear usuario
         user_id = create_user(
@@ -1553,7 +1621,7 @@ def register():
         )
         
         if not user_id:
-            return jsonify({'error': 'Error creating user'}), 500
+            return jsonify({'error': msgs['error_creating']}), 500
         
         # Inicializar memoria neuronal
         init_neural_memory(user_id)
@@ -1561,13 +1629,13 @@ def register():
         # Generar token
         token = generate_jwt_token(user_id)
         if not token:
-            return jsonify({'error': 'Error generating token'}), 500
+            return jsonify({'error': msgs['error_token']}), 500
         
         print(f"✅ User registered successfully: {user_id}")
         
         return jsonify({
             'success': True,
-            'message': 'User registered successfully',
+            'message': msgs['success'],
             'token': token,
             'user_id': user_id,
             'user': {
@@ -1577,7 +1645,8 @@ def register():
                 'last_name': data['last_name'],
                 'subscription_plan': 'free',
                 'credits': 100
-            }
+            },
+            'detected_language': detected_language
         }), 201
         
     except Exception as e:
@@ -1588,37 +1657,60 @@ def register():
 
 @app.route('/auth/login', methods=['POST'])
 def login():
-    """Login de usuario"""
+    """Login de usuario - CON DETECCIÓN DE IDIOMA"""
     try:
         print("🚀 Login endpoint called")
         data = request.get_json()
         
+        # Detectar idioma del email o cualquier texto proporcionado
+        detected_language = detect_user_language(data.get('email', ''))
+        
+        # Mensajes multiidioma
+        messages = {
+            'es': {
+                'credentials_required': 'Email y contraseña son requeridos',
+                'invalid_credentials': 'Credenciales inválidas',
+                'use_google': 'Por favor usa Google Sign-In para esta cuenta',
+                'error_token': 'Error generando token',
+                'success': 'Inicio de sesión exitoso'
+            },
+            'en': {
+                'credentials_required': 'Email and password are required',
+                'invalid_credentials': 'Invalid credentials',
+                'use_google': 'Please use Google Sign-In for this account',
+                'error_token': 'Error generating token',
+                'success': 'Login successful'
+            }
+        }
+        
+        msgs = messages.get(detected_language, messages['en'])
+        
         if not data or 'email' not in data or 'password' not in data:
-            return jsonify({'error': 'Email and password are required'}), 400
+            return jsonify({'error': msgs['credentials_required']}), 400
         
         email = data['email'].lower().strip()
         password = data['password']
         
         user = get_user_by_email(email)
         if not user:
-            return jsonify({'error': 'Invalid credentials'}), 401
+            return jsonify({'error': msgs['invalid_credentials']}), 401
         
         # Verificar que sea usuario manual (no Google)
         if user.get('auth_provider') != 'manual':
-            return jsonify({'error': 'Please use Google Sign-In for this account'}), 401
+            return jsonify({'error': msgs['use_google']}), 401
         
         if not verify_password(password, user.get('password_hash')):
-            return jsonify({'error': 'Invalid credentials'}), 401
+            return jsonify({'error': msgs['invalid_credentials']}), 401
         
         token = generate_jwt_token(user['id'])
         if not token:
-            return jsonify({'error': 'Error generating token'}), 500
+            return jsonify({'error': msgs['error_token']}), 500
         
         print(f"✅ User logged in successfully: {user['id']}")
         
         return jsonify({
             'success': True,
-            'message': 'Login successful',
+            'message': msgs['success'],
             'token': token,
             'user': {
                 'id': user['id'],
@@ -1628,7 +1720,8 @@ def login():
                 'subscription_plan': user['subscription_plan'],
                 'credits': user['credits'],
                 'auth_provider': user['auth_provider']
-            }
+            },
+            'detected_language': detected_language
         })
         
     except Exception as e:
@@ -1913,7 +2006,7 @@ def create_new_chat(user):
 def chat_with_bot(user):
     """
     Procesa mensaje del usuario y retorna respuesta del bot
-    VERSIÓN CORREGIDA Y COMPLETA
+    VERSIÓN CORREGIDA Y COMPLETA CON DETECCIÓN DE IDIOMA
     """
     try:
         data = request.get_json()
@@ -1959,7 +2052,7 @@ def chat_with_bot(user):
                     'user_id': user['id']
                 }), 404
         
-        # OBTENER CONTEXTO MEJORADO
+        # OBTENER CONTEXTO MEJORADO (incluye detección de idioma)
         enhanced_context = get_enhanced_context_for_chat(user, session_id, project_id, data)
         
         # DETECTAR INTENCIÓN DE BÚSQUEDA DE INVERSORES
@@ -1973,12 +2066,28 @@ def chat_with_bot(user):
         user_credits_before = get_user_credits(user['id'])
         credits_required = CREDIT_COSTS.get('basic_bot', 5)
         
+        # Mensajes de error multiidioma
+        error_messages = {
+            'es': {
+                'insufficient_credits': 'Créditos insuficientes',
+                'upgrade_needed': 'Necesitas actualizar tu plan'
+            },
+            'en': {
+                'insufficient_credits': 'Insufficient credits',
+                'upgrade_needed': 'Upgrade needed'
+            }
+        }
+        
+        detected_language = enhanced_context.get('user_language', 'en')
+        msgs = error_messages.get(detected_language, error_messages['en'])
+        
         if user_credits_before < credits_required:
             return jsonify({
-                'error': 'Insufficient credits',
+                'error': msgs['insufficient_credits'],
                 'required': credits_required,
                 'available': user_credits_before,
-                'upgrade_needed': True
+                'upgrade_needed': True,
+                'detected_language': detected_language
             }), 402
         
         # PROCESAR CON BOT MANAGER
@@ -2017,10 +2126,23 @@ def chat_with_bot(user):
         
         # Si quiere buscar inversores y no tiene el plan adecuado
         if wants_investor_search and user.get('plan', 'free') == 'free':
+            upgrade_messages = {
+                'es': {
+                    'message': 'Actualiza al plan Growth para buscar inversores',
+                    'benefits': ['Búsqueda de inversores con ML', '100k créditos de lanzamiento']
+                },
+                'en': {
+                    'message': 'Upgrade to Growth plan to search investors',
+                    'benefits': ['ML-powered investor search', '100k launch credits']
+                }
+            }
+            
+            lang_msgs = upgrade_messages.get(detected_language, upgrade_messages['en'])
+            
             final_response['upgrade_suggestion'] = {
-                'message': 'Upgrade to Growth plan to search investors',
+                'message': lang_msgs['message'],
                 'plan': 'growth',
-                'benefits': ['ML-powered investor search', '100k launch credits']
+                'benefits': lang_msgs['benefits']
             }
         
         return jsonify(final_response)
@@ -2033,6 +2155,88 @@ def chat_with_bot(user):
             'error': 'Could not process chat',
             'details': str(e)
         }), 500
+
+@app.route('/chat/history', methods=['GET'])
+@require_auth
+def get_chat_history(user):
+    """Obtiene historial de conversaciones agrupadas por sesión"""
+    try:
+        with engine.connect() as conn:
+            # Obtener conversaciones agrupadas por session_id
+            result = conn.execute(text("""
+                SELECT 
+                    COALESCE(session_id, id::text) as conversation_id,
+                    MIN(created_at) as started_at,
+                    MAX(created_at) as last_message_at,
+                    COUNT(*) as message_count,
+                    MAX(user_input) as last_message,
+                    MAX(bot_used) as last_bot
+                FROM neural_interactions 
+                WHERE user_id = :user_id 
+                GROUP BY COALESCE(session_id, id::text)
+                ORDER BY MAX(created_at) DESC
+                LIMIT 20
+            """), {"user_id": user['id']}).fetchall()
+            
+            conversations = []
+            for row in result:
+                conversations.append({
+                    'conversation_id': row[0],
+                    'started_at': row[1].isoformat(),
+                    'last_message_at': row[2].isoformat(),
+                    'message_count': row[3],
+                    'last_message': row[4][:100] + '...' if len(row[4]) > 100 else row[4],
+                    'last_bot': row[5]
+                })
+        
+        return jsonify({
+            'success': True,
+            'conversations': conversations
+        })
+        
+    except Exception as e:
+        print(f"Error getting chat history: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/chat/conversation/<conversation_id>', methods=['GET'])
+@require_auth
+def get_conversation_messages(user, conversation_id):
+    """Obtiene todos los mensajes de una conversación específica"""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT id, bot_used, user_input, bot_output, credits_charged, 
+                       context_data, created_at
+                FROM neural_interactions
+                WHERE user_id = :user_id 
+                AND (session_id = :conversation_id OR id::text = :conversation_id)
+                ORDER BY created_at ASC
+            """), {
+                "user_id": user['id'],
+                "conversation_id": conversation_id
+            }).fetchall()
+            
+            messages = []
+            for row in result:
+                messages.append({
+                    'id': str(row[0]),
+                    'bot_used': row[1],
+                    'user_input': row[2],
+                    'bot_output': row[3],
+                    'credits_charged': row[4],
+                    'context_data': json.loads(row[5]) if row[5] else {},
+                    'created_at': row[6].isoformat()
+                })
+        
+        return jsonify({
+            'success': True,
+            'conversation_id': conversation_id,
+            'messages': messages
+        })
+        
+    except Exception as e:
+        print(f"Error getting conversation: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/chat/stats', methods=['GET'])
 @require_auth
@@ -2137,28 +2341,54 @@ def get_available_bots(user):
 @app.route('/subscription/upgrade', methods=['POST'])
 @require_auth
 def upgrade_subscription(user):
-    """Actualiza el plan de suscripción"""
+    """Actualiza el plan de suscripción - CON MENSAJES MULTIIDIOMA"""
     try:
         data = request.get_json()
+        
+        # Detectar idioma
+        detected_language = detect_user_language(str(data))
+        
+        messages = {
+            'es': {
+                'plan_required': 'El plan es requerido',
+                'invalid_plan': 'Plan inválido',
+                'already_subscribed': 'Ya estás suscrito a este plan',
+                'upgrade_failed': 'Error al actualizar suscripción',
+                'upgrade_success': 'Actualizado exitosamente al plan {}',
+                'credits_added': 'créditos añadidos'
+            },
+            'en': {
+                'plan_required': 'Plan is required',
+                'invalid_plan': 'Invalid plan',
+                'already_subscribed': 'Already subscribed to this plan',
+                'upgrade_failed': 'Failed to update subscription',
+                'upgrade_success': 'Successfully upgraded to {} plan',
+                'credits_added': 'credits added'
+            }
+        }
+        
+        msgs = messages.get(detected_language, messages['en'])
+        
         if not data or 'plan' not in data:
-            return jsonify({'error': 'Plan is required'}), 400
+            return jsonify({'error': msgs['plan_required']}), 400
             
         new_plan = data['plan']
         if new_plan not in SUBSCRIPTION_PLANS:
-            return jsonify({'error': 'Invalid plan'}), 400
+            return jsonify({'error': msgs['invalid_plan']}), 400
             
         if new_plan == user['subscription_plan']:
-            return jsonify({'error': 'Already subscribed to this plan'}), 400
+            return jsonify({'error': msgs['already_subscribed']}), 400
             
         success = update_subscription_plan(user['id'], new_plan)
         if not success:
-            return jsonify({'error': 'Failed to update subscription'}), 500
+            return jsonify({'error': msgs['upgrade_failed']}), 500
             
         return jsonify({
             'success': True,
-            'message': f'Successfully upgraded to {new_plan} plan',
+            'message': msgs['upgrade_success'].format(new_plan),
             'new_plan': new_plan,
-            'credits_added': SUBSCRIPTION_PLANS[new_plan]['launch_credits']
+            'credits_added': SUBSCRIPTION_PLANS[new_plan]['launch_credits'],
+            'detected_language': detected_language
         })
         
     except Exception as e:
@@ -2181,7 +2411,7 @@ def get_all_users(user):
         with engine.connect() as conn:
             result = conn.execute(
                 text("""
-                    SELECT id, email, first_name, last_name, subscription_plan, 
+                    SELECT id, email, first_name, last_name, plan, 
                            credits, is_admin, auth_provider, created_at, updated_at
                     FROM users 
                     ORDER BY created_at DESC
@@ -2229,7 +2459,9 @@ def method_not_allowed(error):
 def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
-# ENDPOINT /projects ARREGLADO PARA TU ESQUEMA EXACTO
+# ==============================================================================
+#           NUEVOS ENDPOINTS
+# ==============================================================================
 
 @app.route('/projects', methods=['GET', 'POST'])
 @require_auth
@@ -2276,6 +2508,9 @@ def handle_projects(user):
             if not data:
                 return jsonify({'error': 'No data provided'}), 400
             
+            # Detectar idioma para mensajes
+            detected_language = detect_user_language(data.get('name', '') + ' ' + data.get('description', ''))
+            
             project_id = str(uuid.uuid4())
             project_name = data.get('name', 'Untitled Project')
             project_description = data.get('description', '')
@@ -2312,22 +2547,22 @@ def handle_projects(user):
                 conn.commit()
                 print(f"✅ Project created successfully: {project_id}")
             
+            success_messages = {
+                'es': 'Proyecto creado exitosamente',
+                'en': 'Project created successfully'
+            }
+            
             return jsonify({
                 'success': True,
-                'message': 'Project created successfully',
-                'project_id': project_id
+                'message': success_messages.get(detected_language, success_messages['en']),
+                'project_id': project_id,
+                'detected_language': detected_language
             })
             
     except Exception as e:
         print(f"❌ Error in projects endpoint: {e}")
         return jsonify({'error': f'Database error: {str(e)}'}), 500
 
-
-# ==============================================================================
-#           NUEVOS ENDPOINTS QUE FALTAN
-# ==============================================================================
-
-# 1. ✅ ENDPOINT: /chat/recent - Obtener chats recientes
 @app.route('/chat/recent', methods=['GET'])
 @require_auth
 def get_recent_chats_with_titles(user):
@@ -2396,9 +2631,6 @@ def get_recent_chats_with_titles(user):
         print(f"❌ Error getting recent chats: {e}")
         return jsonify({'error': 'Could not get recent chats'}), 500
 
-
-
-# 2. ✅ ENDPOINT: /chat/messages/<session_id> - Obtener mensajes de un chat
 @app.route('/chat/messages/<session_id>', methods=['GET'])
 @require_auth
 def get_chat_messages(user, session_id):
@@ -2411,12 +2643,12 @@ def get_chat_messages(user, session_id):
         with engine.connect() as conn:
             result = conn.execute(text("""
                 SELECT ni.id, ni.bot_used, ni.user_input, ni.bot_output, ni.credits_charged, 
-       ni.context_data, ni.created_at, ni.project_id, p.project_name
+                       ni.context_data, ni.created_at, ni.project_id, p.project_name
                 FROM neural_interactions ni
-LEFT JOIN projects p ON ni.project_id = p.id
-                WHERE user_id = :user_id 
-                AND (session_id::text = :session_id OR id::text = :session_id)
-                ORDER BY created_at ASC
+                LEFT JOIN projects p ON ni.project_id = p.id
+                WHERE ni.user_id = :user_id 
+                AND (ni.session_id::text = :session_id OR ni.id::text = :session_id)
+                ORDER BY ni.created_at ASC
             """), {
                 "user_id": user['id'],
                 "session_id": session_id
@@ -2459,7 +2691,6 @@ LEFT JOIN projects p ON ni.project_id = p.id
         print(f"❌ Error getting chat messages: {e}")
         return jsonify({'error': 'Could not get chat messages'}), 500
 
-# 3. ✅ ENDPOINT BONUS: /chat/delete/<session_id> - Eliminar conversación
 @app.route('/chat/delete/<session_id>', methods=['DELETE'])
 @require_auth
 def delete_chat_session(user, session_id):
@@ -2476,7 +2707,13 @@ def delete_chat_session(user, session_id):
             """), {"user_id": user['id'], "session_id": session_id}).scalar()
             
             if count_result == 0:
-                return jsonify({'error': 'Chat session not found'}), 404
+                # Detectar idioma para mensaje
+                detected_language = 'es'  # Default, ya que no hay mensaje del usuario
+                error_messages = {
+                    'es': 'Sesión de chat no encontrada',
+                    'en': 'Chat session not found'
+                }
+                return jsonify({'error': error_messages.get(detected_language, error_messages['en'])}), 404
             
             # ✅ DELETE CORREGIDO - Sin referencia a tabla 'ni'
             conn.execute(text("""
@@ -2487,9 +2724,14 @@ def delete_chat_session(user, session_id):
             
             conn.commit()
         
+        success_messages = {
+            'es': 'Sesión de chat eliminada exitosamente',
+            'en': 'Chat session deleted successfully'
+        }
+        
         return jsonify({
             'success': True,
-            'message': 'Chat session deleted successfully',
+            'message': success_messages.get('es', success_messages['en']),
             'deleted_messages': count_result
         })
         
@@ -2497,20 +2739,41 @@ def delete_chat_session(user, session_id):
         print(f"❌ Error deleting chat session: {e}")
         return jsonify({'error': 'Could not delete chat session'}), 500
 
-
 @app.route('/documents/generate', methods=['POST'])
 @require_auth
 def generate_document_with_bot(user):
-    """Genera documento extenso usando bot específico"""
+    """Genera documento extenso usando bot específico - CON DETECCIÓN DE IDIOMA"""
     try:
         data = request.get_json()
         
+        # Detectar idioma
+        user_requirements = data.get('requirements', '')
+        detected_language = detect_user_language(user_requirements)
+        
+        messages = {
+            'es': {
+                'required_fields': 'document_type y project_id son requeridos',
+                'project_not_found': 'Proyecto no encontrado',
+                'invalid_doc_type': 'Tipo de documento inválido',
+                'insufficient_credits': 'Créditos insuficientes',
+                'error_generating': 'No se pudo generar el documento'
+            },
+            'en': {
+                'required_fields': 'document_type and project_id are required',
+                'project_not_found': 'Project not found',
+                'invalid_doc_type': 'Invalid document type',
+                'insufficient_credits': 'Insufficient credits',
+                'error_generating': 'Could not generate document'
+            }
+        }
+        
+        msgs = messages.get(detected_language, messages['en'])
+        
         if not data or not data.get('document_type') or not data.get('project_id'):
-            return jsonify({'error': 'document_type and project_id are required'}), 400
+            return jsonify({'error': msgs['required_fields']}), 400
         
         document_type = data['document_type']  # 'pitch_deck', 'business_plan', 'marketing_plan'
         project_id = data['project_id']
-        user_requirements = data.get('requirements', '')
         
         # Verificar proyecto
         with engine.connect() as conn:
@@ -2520,7 +2783,7 @@ def generate_document_with_bot(user):
             ).fetchone()
             
             if not project_result:
-                return jsonify({'error': 'Project not found'}), 404
+                return jsonify({'error': msgs['project_not_found']}), 404
         
         # Determinar bot y créditos requeridos
         bot_config = {
@@ -2531,7 +2794,7 @@ def generate_document_with_bot(user):
         }
         
         if document_type not in bot_config:
-            return jsonify({'error': 'Invalid document type'}), 400
+            return jsonify({'error': msgs['invalid_doc_type']}), 400
         
         bot_id = bot_config[document_type]['bot']
         credits_required = bot_config[document_type]['credits']
@@ -2539,211 +2802,261 @@ def generate_document_with_bot(user):
         # Verificar créditos
         if not has_sufficient_credits(user['id'], credits_required):
             return jsonify({
-                'error': 'Insufficient credits',
+                'error': msgs['insufficient_credits'],
                 'required': credits_required,
                 'available': get_user_credits(user['id'])
             }), 402
         
-        # Crear prompt especializado para documento extenso
+        # Crear prompt especializado para documento extenso EN EL IDIOMA DETECTADO
         project_data = json.loads(project_result[4]) if project_result[4] else {}
         
-        prompts = {
-            'pitch_deck': f"""
-            Eres el mejor creador de pitch decks del mundo. Crea un pitch deck COMPLETO y DETALLADO para esta startup.
-            
-            INFORMACIÓN DEL PROYECTO:
-            - Nombre: {project_data.get('name', 'Mi Startup')}
-            - Industria: {project_data.get('industry', 'Technology')}
-            - Descripción: {project_data.get('description', '')}
-            - Etapa: {project_data.get('stage', 'Seed')}
-            
-            REQUISITOS ESPECÍFICOS:
-            {user_requirements}
-            
-            ESTRUCTURA REQUERIDA (crear cada sección en detalle):
-            1. **COVER SLIDE**: Nombre, tagline, logo placeholder
-            2. **PROBLEM**: Problema específico y dolor real
-            3. **SOLUTION**: Solución única y diferenciada
-            4. **MARKET SIZE**: TAM, SAM, SOM con números reales
-            5. **PRODUCT**: Features clave y demostración
-            6. **BUSINESS MODEL**: Cómo generas dinero
-            7. **TRACTION**: Métricas y logros actuales
-            8. **COMPETITION**: Análisis competitivo
-            9. **MARKETING**: Go-to-market strategy
-            10. **TEAM**: Fundadores y equipo clave
-            11. **FINANCIALS**: Proyecciones 3-5 años
-            12. **FUNDING**: Cantidad, uso de fondos, valoración
-            13. **TIMELINE**: Roadmap y milestones
-            14. **APPENDIX**: Información adicional
-            
-            FORMATO:
-            - Cada slide con título H2
-            - Contenido detallado y específico
-            - Números y métricas concretas
-            - Call-to-action en cada slide
-            - Mínimo 2000 palabras total
-            """,
-            
-            'business_plan': f"""
-            Crea un BUSINESS PLAN COMPLETO y PROFESIONAL para esta startup.
-            
-            INFORMACIÓN DEL PROYECTO:
-            - Nombre: {project_data.get('name', 'Mi Startup')}
-            - Industria: {project_data.get('industry', 'Technology')}
-            - Descripción: {project_data.get('description', '')}
-            
-            REQUISITOS:
-            {user_requirements}
-            
-            ESTRUCTURA COMPLETA:
-            
-            ## 1. EXECUTIVE SUMMARY
-            - Resumen ejecutivo de 2 páginas
-            - Propuesta de valor única
-            - Proyecciones financieras clave
-            - Funding necesario
-            
-            ## 2. COMPANY DESCRIPTION
-            - Historia y misión
-            - Visión y valores
-            - Estructura legal
-            - Ubicación y operaciones
-            
-            ## 3. MARKET ANALYSIS
-            - Análisis de industria
-            - Target market segmentation
-            - Market size (TAM, SAM, SOM)
-            - Trends y oportunidades
-            
-            ## 4. COMPETITIVE ANALYSIS
-            - Landscape competitivo
-            - Direct vs indirect competitors
-            - Análisis SWOT
-            - Ventaja competitiva sostenible
-            
-            ## 5. PRODUCTS & SERVICES
-            - Descripción detallada del producto
-            - Features y beneficios
-            - Roadmap de desarrollo
-            - Intellectual property
-            
-            ## 6. MARKETING & SALES STRATEGY
-            - Customer personas
-            - Marketing mix (4Ps)
-            - Sales funnel
-            - Customer acquisition strategy
-            - Pricing strategy
-            
-            ## 7. OPERATIONS PLAN
-            - Operational workflow
-            - Supply chain
-            - Technology infrastructure
-            - Quality control
-            
-            ## 8. MANAGEMENT TEAM
-            - Team bios y experiencia
-            - Organizational chart
-            - Advisory board
-            - Hiring plan
-            
-            ## 9. FINANCIAL PROJECTIONS
-            - 5-year P&L projection
-            - Cash flow analysis
-            - Break-even analysis
-            - Key financial ratios
-            - Funding requirements
-            
-            ## 10. RISK ANALYSIS
-            - Market risks
-            - Operational risks
-            - Financial risks
-            - Mitigation strategies
-            
-            Mínimo 4000 palabras con números específicos y análisis detallado.
-            """,
-            
-            'marketing_plan': f"""
-            Crea un MARKETING PLAN COMPLETO Y ESTRATÉGICO para esta startup.
-            
-            PROYECTO: {project_data.get('name', 'Mi Startup')}
-            INDUSTRIA: {project_data.get('industry', 'Technology')}
-            DESCRIPCIÓN: {project_data.get('description', '')}
-            
-            REQUISITOS ESPECÍFICOS:
-            {user_requirements}
-            
-            PLAN COMPLETO:
-            
-            ## 1. SITUATION ANALYSIS
-            - Current market position
-            - SWOT analysis
-            - Customer insights
-            - Competitive landscape
-            
-            ## 2. TARGET AUDIENCE
-            - Primary personas (3-5 detailed profiles)
-            - Secondary audiences
-            - Customer journey mapping
-            - Pain points y motivations
-            
-            ## 3. BRAND POSITIONING
-            - Brand identity y personality
-            - Unique value proposition
-            - Brand messaging framework
-            - Tone of voice
-            
-            ## 4. MARKETING OBJECTIVES
-            - SMART goals (1-2 años)
-            - KPIs y métricas
-            - Budget allocation
-            - ROI expectations
-            
-            ## 5. MARKETING STRATEGY
-            - Content marketing strategy
-            - SEO/SEM strategy
-            - Social media strategy
-            - Email marketing
-            - Influencer partnerships
-            - PR y media outreach
-            
-            ## 6. CHANNEL STRATEGY
-            - Digital channels priority
-            - Offline channels (si aplica)
-            - Channel integration
-            - Attribution modeling
-            
-            ## 7. CONTENT CALENDAR
-            - Editorial calendar (3 meses)
-            - Content pillars
-            - Content formats
-            - Distribution schedule
-            
-            ## 8. BUDGET & RESOURCES
-            - Marketing budget breakdown
-            - Team requirements
-            - Tools y software needed
-            - Expected CAC/LTV
-            
-            ## 9. IMPLEMENTATION TIMELINE
-            - 90-day action plan
-            - Monthly milestones
-            - Key deliverables
-            - Risk mitigation
-            
-            ## 10. MEASUREMENT & OPTIMIZATION
-            - Analytics setup
-            - Reporting framework
-            - A/B testing plan
-            - Optimization process
-            
-            Incluir ejemplos específicos, números y tácticas accionables. Mínimo 3000 palabras.
-            """
+        # Prompts multiidioma para documentos
+        doc_prompts = {
+            'es': {
+                'pitch_deck': f"""
+                Eres el mejor creador de pitch decks del mundo. Crea un pitch deck COMPLETO y DETALLADO para esta startup.
+                
+                INFORMACIÓN DEL PROYECTO:
+                - Nombre: {project_data.get('name', 'Mi Startup')}
+                - Industria: {project_data.get('industry', 'Tecnología')}
+                - Descripción: {project_data.get('description', '')}
+                - Etapa: {project_data.get('stage', 'Seed')}
+                
+                REQUISITOS ESPECÍFICOS:
+                {user_requirements}
+                
+                ESTRUCTURA REQUERIDA (crear cada sección en detalle):
+                1. **PORTADA**: Nombre, tagline, logo placeholder
+                2. **PROBLEMA**: Problema específico y dolor real
+                3. **SOLUCIÓN**: Solución única y diferenciada
+                4. **TAMAÑO DE MERCADO**: TAM, SAM, SOM con números reales
+                5. **PRODUCTO**: Características clave y demostración
+                6. **MODELO DE NEGOCIO**: Cómo generas dinero
+                7. **TRACCIÓN**: Métricas y logros actuales
+                8. **COMPETENCIA**: Análisis competitivo
+                9. **MARKETING**: Estrategia go-to-market
+                10. **EQUIPO**: Fundadores y equipo clave
+                11. **FINANZAS**: Proyecciones 3-5 años
+                12. **FINANCIACIÓN**: Cantidad, uso de fondos, valoración
+                13. **CRONOGRAMA**: Roadmap y milestones
+                14. **APÉNDICE**: Información adicional
+                
+                FORMATO:
+                - Cada slide con título H2
+                - Contenido detallado y específico
+                - Números y métricas concretas
+                - Call-to-action en cada slide
+                - Mínimo 2000 palabras total
+                
+                Responde COMPLETAMENTE EN ESPAÑOL.
+                """,
+                
+                'business_plan': f"""
+                Crea un PLAN DE NEGOCIO COMPLETO y PROFESIONAL para esta startup.
+                
+                INFORMACIÓN DEL PROYECTO:
+                - Nombre: {project_data.get('name', 'Mi Startup')}
+                - Industria: {project_data.get('industry', 'Tecnología')}
+                - Descripción: {project_data.get('description', '')}
+                
+                REQUISITOS:
+                {user_requirements}
+                
+                ESTRUCTURA COMPLETA:
+                
+                ## 1. RESUMEN EJECUTIVO
+                - Resumen ejecutivo de 2 páginas
+                - Propuesta de valor única
+                - Proyecciones financieras clave
+                - Financiación necesaria
+                
+                ## 2. DESCRIPCIÓN DE LA EMPRESA
+                - Historia y misión
+                - Visión y valores
+                - Estructura legal
+                - Ubicación y operaciones
+                
+                ## 3. ANÁLISIS DE MERCADO
+                - Análisis de industria
+                - Segmentación del mercado objetivo
+                - Tamaño de mercado (TAM, SAM, SOM)
+                - Tendencias y oportunidades
+                
+                ## 4. ANÁLISIS COMPETITIVO
+                - Panorama competitivo
+                - Competidores directos vs indirectos
+                - Análisis SWOT
+                - Ventaja competitiva sostenible
+                
+                ## 5. PRODUCTOS Y SERVICIOS
+                - Descripción detallada del producto
+                - Características y beneficios
+                - Roadmap de desarrollo
+                - Propiedad intelectual
+                
+                ## 6. ESTRATEGIA DE MARKETING Y VENTAS
+                - Personas de clientes
+                - Marketing mix (4Ps)
+                - Embudo de ventas
+                - Estrategia de adquisición de clientes
+                - Estrategia de precios
+                
+                ## 7. PLAN DE OPERACIONES
+                - Flujo de trabajo operacional
+                - Cadena de suministro
+                - Infraestructura tecnológica
+                - Control de calidad
+                
+                ## 8. EQUIPO DE GESTIÓN
+                - Biografías del equipo y experiencia
+                - Organigrama
+                - Junta asesora
+                - Plan de contratación
+                
+                ## 9. PROYECCIONES FINANCIERAS
+                - Proyección P&L a 5 años
+                - Análisis de flujo de caja
+                - Análisis de punto de equilibrio
+                - Ratios financieros clave
+                - Requisitos de financiación
+                
+                ## 10. ANÁLISIS DE RIESGOS
+                - Riesgos de mercado
+                - Riesgos operacionales
+                - Riesgos financieros
+                - Estrategias de mitigación
+                
+                Mínimo 4000 palabras con números específicos y análisis detallado.
+                Responde COMPLETAMENTE EN ESPAÑOL.
+                """
+            },
+            'en': {
+                'pitch_deck': f"""
+                You are the world's best pitch deck creator. Create a COMPLETE and DETAILED pitch deck for this startup.
+                
+                PROJECT INFORMATION:
+                - Name: {project_data.get('name', 'My Startup')}
+                - Industry: {project_data.get('industry', 'Technology')}
+                - Description: {project_data.get('description', '')}
+                - Stage: {project_data.get('stage', 'Seed')}
+                
+                SPECIFIC REQUIREMENTS:
+                {user_requirements}
+                
+                REQUIRED STRUCTURE (create each section in detail):
+                1. **COVER SLIDE**: Name, tagline, logo placeholder
+                2. **PROBLEM**: Specific problem and real pain
+                3. **SOLUTION**: Unique and differentiated solution
+                4. **MARKET SIZE**: TAM, SAM, SOM with real numbers
+                5. **PRODUCT**: Key features and demonstration
+                6. **BUSINESS MODEL**: How you make money
+                7. **TRACTION**: Current metrics and achievements
+                8. **COMPETITION**: Competitive analysis
+                9. **MARKETING**: Go-to-market strategy
+                10. **TEAM**: Founders and key team
+                11. **FINANCIALS**: 3-5 year projections
+                12. **FUNDING**: Amount, use of funds, valuation
+                13. **TIMELINE**: Roadmap and milestones
+                14. **APPENDIX**: Additional information
+                
+                FORMAT:
+                - Each slide with H2 title
+                - Detailed and specific content
+                - Concrete numbers and metrics
+                - Call-to-action on each slide
+                - Minimum 2000 words total
+                
+                Respond COMPLETELY IN ENGLISH.
+                """,
+                
+                'business_plan': f"""
+                Create a COMPLETE and PROFESSIONAL BUSINESS PLAN for this startup.
+                
+                PROJECT INFORMATION:
+                - Name: {project_data.get('name', 'My Startup')}
+                - Industry: {project_data.get('industry', 'Technology')}
+                - Description: {project_data.get('description', '')}
+                
+                REQUIREMENTS:
+                {user_requirements}
+                
+                COMPLETE STRUCTURE:
+                
+                ## 1. EXECUTIVE SUMMARY
+                - 2-page executive summary
+                - Unique value proposition
+                - Key financial projections
+                - Funding needed
+                
+                ## 2. COMPANY DESCRIPTION
+                - History and mission
+                - Vision and values
+                - Legal structure
+                - Location and operations
+                
+                ## 3. MARKET ANALYSIS
+                - Industry analysis
+                - Target market segmentation
+                - Market size (TAM, SAM, SOM)
+                - Trends and opportunities
+                
+                ## 4. COMPETITIVE ANALYSIS
+                - Competitive landscape
+                - Direct vs indirect competitors
+                - SWOT analysis
+                - Sustainable competitive advantage
+                
+                ## 5. PRODUCTS & SERVICES
+                - Detailed product description
+                - Features and benefits
+                - Development roadmap
+                - Intellectual property
+                
+                ## 6. MARKETING & SALES STRATEGY
+                - Customer personas
+                - Marketing mix (4Ps)
+                - Sales funnel
+                - Customer acquisition strategy
+                - Pricing strategy
+                
+                ## 7. OPERATIONS PLAN
+                - Operational workflow
+                - Supply chain
+                - Technology infrastructure
+                - Quality control
+                
+                ## 8. MANAGEMENT TEAM
+                - Team bios and experience
+                - Organizational chart
+                - Advisory board
+                - Hiring plan
+                
+                ## 9. FINANCIAL PROJECTIONS
+                - 5-year P&L projection
+                - Cash flow analysis
+                - Break-even analysis
+                - Key financial ratios
+                - Funding requirements
+                
+                ## 10. RISK ANALYSIS
+                - Market risks
+                - Operational risks
+                - Financial risks
+                - Mitigation strategies
+                
+                Minimum 4000 words with specific numbers and detailed analysis.
+                Respond COMPLETELY IN ENGLISH.
+                """
+            }
         }
+        
+        # Seleccionar prompts según idioma
+        prompts = doc_prompts.get(detected_language, doc_prompts['en'])[document_type]
         
         # Generar documento con Gemini
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(
-            prompts[document_type],
+            prompts,
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.95,
@@ -2755,7 +3068,7 @@ def generate_document_with_bot(user):
         # Cobrar créditos
         credits_after = charge_credits(user['id'], credits_required)
         if credits_after is None:
-            return jsonify({'error': 'Could not charge credits'}), 500
+            return jsonify({'error': msgs['error_generating']}), 500
         
         # Guardar documento
         document_id = str(uuid.uuid4())
@@ -2783,7 +3096,8 @@ def generate_document_with_bot(user):
                         "project_id": project_id,
                         "word_count": len(response.text.split()),
                         "generated_at": datetime.now().isoformat(),
-                        "user_requirements": user_requirements
+                        "user_requirements": user_requirements,
+                        "language": detected_language
                     }),
                     "credits_used": credits_required
                 }
@@ -2800,7 +3114,8 @@ def generate_document_with_bot(user):
             'credits_used': credits_required,
             'credits_remaining': credits_after,
             'download_url': f'/documents/{document_id}/download',
-            'view_url': f'/documents/{document_id}/view'
+            'view_url': f'/documents/{document_id}/view',
+            'detected_language': detected_language
         })
         
     except Exception as e:
@@ -2849,76 +3164,51 @@ def view_document(user, document_id):
         print(f"❌ Error viewing document: {e}")
         return jsonify({'error': 'Could not view document'}), 500
 
-ALLOWED_EXTENSIONS = {'txt', 'pdf', 'docx', 'doc', 'md'}
-MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB
+# Configuración para subida de archivos
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'png', 'jpg', 'jpeg'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def extract_text_from_file(file_path, file_extension):
-    """Extrae texto de diferentes tipos de archivo"""
-    try:
-        if file_extension == 'txt' or file_extension == 'md':
-            with open(file_path, 'r', encoding='utf-8') as f:
-                return f.read()
-        
-        elif file_extension == 'pdf':
-            text = ""
-            with open(file_path, 'rb') as f:
-                pdf_reader = PyPDF2.PdfReader(f)
-                for page in pdf_reader.pages:
-                    text += page.extract_text() + "\n"
-            return text
-        
-        elif file_extension in ['docx', 'doc']:
-            doc = docx.Document(file_path)
-            text = ""
-            for paragraph in doc.paragraphs:
-                text += paragraph.text + "\n"
-            return text
-        
-        else:
-            return "Formato de archivo no soportado"
-            
-    except Exception as e:
-        print(f"❌ Error extracting text: {e}")
-        return f"Error extrayendo texto: {str(e)}"
-
-@app.route('/documents/upload', methods=['POST'])
+@app.route('/files/upload', methods=['POST'])
 @require_auth
-def upload_document(user):
-    """Upload y análisis de documentos del usuario"""
+def upload_file(user):
+    """Subir archivo para análisis - CON DETECCIÓN DE IDIOMA"""
     try:
-        # Verificar que hay archivo
+        # Detectar idioma del usuario
+        detected_language = 'es'  # Default
+        
+        messages = {
+            'es': {
+                'no_file': 'No se encontró archivo',
+                'no_filename': 'Archivo sin nombre',
+                'invalid_type': 'Tipo de archivo no permitido',
+                'file_too_large': 'Archivo demasiado grande (máximo 10MB)',
+                'upload_failed': 'Error al subir archivo',
+                'upload_success': 'Archivo subido exitosamente'
+            },
+            'en': {
+                'no_file': 'No file found',
+                'no_filename': 'File without name',
+                'invalid_type': 'File type not allowed',
+                'file_too_large': 'File too large (maximum 10MB)',
+                'upload_failed': 'Error uploading file',
+                'upload_success': 'File uploaded successfully'
+            }
+        }
+        
+        msgs = messages.get(detected_language, messages['en'])
+        
         if 'file' not in request.files:
-            return jsonify({'error': 'No file provided'}), 400
+            return jsonify({'error': msgs['no_file']}), 400
         
         file = request.files['file']
-        project_id = request.form.get('project_id')
-        document_purpose = request.form.get('purpose', 'general')  # 'analysis', 'reference', 'improvement'
-        
         if file.filename == '':
-            return jsonify({'error': 'No file selected'}), 400
+            return jsonify({'error': msgs['no_filename']}), 400
         
-        if not project_id:
-            return jsonify({'error': 'project_id is required'}), 400
-        
-        # Verificar proyecto
-        with engine.connect() as conn:
-            project_result = conn.execute(
-                text("SELECT id FROM projects WHERE id = :project_id AND user_id = :user_id"),
-                {"project_id": project_id, "user_id": user['id']}
-            ).fetchone()
-            
-            if not project_result:
-                return jsonify({'error': 'Project not found'}), 404
-        
-        # Verificar archivo
         if not allowed_file(file.filename):
-            return jsonify({
-                'error': 'File type not allowed',
-                'allowed_types': list(ALLOWED_EXTENSIONS)
-            }), 400
+            return jsonify({'error': msgs['invalid_type']}), 400
         
         # Verificar tamaño
         file.seek(0, os.SEEK_END)
@@ -2926,261 +3216,356 @@ def upload_document(user):
         file.seek(0)
         
         if file_size > MAX_FILE_SIZE:
-            return jsonify({
-                'error': 'File too large',
-                'max_size_mb': MAX_FILE_SIZE / (1024 * 1024)
-            }), 400
+            return jsonify({'error': msgs['file_too_large']}), 400
         
-        # Guardar archivo temporalmente
+        # Procesar archivo
         filename = secure_filename(file.filename)
-        file_extension = filename.rsplit('.', 1)[1].lower()
+        file_id = str(uuid.uuid4())
         
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}') as temp_file:
-            file.save(temp_file.name)
-            temp_path = temp_file.name
+        # Extraer contenido según tipo
+        content = ""
+        file_type = filename.rsplit('.', 1)[1].lower()
         
-        try:
-            # Extraer texto del archivo
-            extracted_text = extract_text_from_file(temp_path, file_extension)
-            
-            # Analizar documento con Gemini
-            analysis = analyze_document_with_gemini(extracted_text, document_purpose, filename)
-            
-            # Guardar en base de datos
-            document_id = str(uuid.uuid4())
-            
-            with engine.connect() as conn:
-                conn.execute(
-                    text("""
-                        INSERT INTO generated_documents (
-                            id, user_id, bot_used, document_type, title, content, 
-                            format, metadata, credits_used, created_at, updated_at
-                        ) VALUES (
-                            :id, :user_id, 'document_upload', 'uploaded_document', :title, :content,
-                            :format, :metadata, 0, NOW(), NOW()
-                        )
-                    """),
-                    {
-                        "id": document_id,
-                        "user_id": user['id'],
-                        "title": f"📄 {filename}",
-                        "content": extracted_text,
-                        "format": file_extension,
-                        "metadata": json.dumps({
-                            "original_filename": filename,
-                            "file_size": file_size,
-                            "project_id": project_id,
-                            "purpose": document_purpose,
-                            "uploaded_at": datetime.now().isoformat(),
-                            "analysis": analysis,
-                            "file_type": file_extension,
-                            "character_count": len(extracted_text),
-                            "word_count": len(extracted_text.split())
-                        })
-                    }
-                )
-                conn.commit()
-            
-            # Limpiar archivo temporal
-            os.unlink(temp_path)
-            
-            return jsonify({
-                'success': True,
-                'document_id': document_id,
-                'filename': filename,
-                'file_size': file_size,
-                'text_extracted': len(extracted_text) > 0,
-                'word_count': len(extracted_text.split()),
-                'analysis': analysis,
-                'view_url': f'/documents/{document_id}/view'
-            })
-            
-        except Exception as e:
-            # Limpiar archivo temporal en caso de error
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
-            raise e
+        if file_type == 'pdf':
+            pdf_reader = PyPDF2.PdfReader(file)
+            for page in pdf_reader.pages:
+                content += page.extract_text()
+        
+        elif file_type in ['doc', 'docx']:
+            doc = docx.Document(file)
+            content = '\n'.join([paragraph.text for paragraph in doc.paragraphs])
+        
+        elif file_type in ['txt', 'csv']:
+            content = file.read().decode('utf-8')
+        
+        # Guardar metadata en DB
+        with engine.connect() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO uploaded_files (
+                        id, user_id, filename, file_type, file_size, 
+                        content_preview, metadata, created_at
+                    ) VALUES (
+                        :id, :user_id, :filename, :file_type, :file_size,
+                        :content_preview, :metadata, NOW()
+                    )
+                """),
+                {
+                    "id": file_id,
+                    "user_id": user['id'],
+                    "filename": filename,
+                    "file_type": file_type,
+                    "file_size": file_size,
+                    "content_preview": content[:1000],
+                    "metadata": json.dumps({
+                        "original_filename": file.filename,
+                        "content_length": len(content),
+                        "upload_timestamp": datetime.now().isoformat()
+                    })
+                }
+            )
+            conn.commit()
+        
+        # Analizar contenido con Gemini
+        analysis = analyze_file_content(content, file_type, detected_language)
+        
+        return jsonify({
+            'success': True,
+            'message': msgs['upload_success'],
+            'file_id': file_id,
+            'filename': filename,
+            'file_type': file_type,
+            'file_size': file_size,
+            'content_preview': content[:500] + '...' if len(content) > 500 else content,
+            'analysis': analysis,
+            'detected_language': detected_language
+        })
         
     except Exception as e:
-        print(f"❌ Error uploading document: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': f'Could not upload document: {str(e)}'}), 500
+        print(f"❌ Error uploading file: {e}")
+        return jsonify({'error': msgs['upload_failed']}), 500
 
-def analyze_document_with_gemini(text, purpose, filename):
-    """Analiza el documento subido con Gemini"""
+def analyze_file_content(content, file_type, user_language='en'):
+    """Analiza contenido del archivo con Gemini - MULTIIDIOMA"""
     try:
         analysis_prompts = {
-            'analysis': f"""
-            Analiza este documento y proporciona un resumen ejecutivo profesional.
-            
-            Documento: {filename}
+            'es': f"""
+            Analiza el siguiente contenido de un archivo {file_type} y proporciona:
+            1. Resumen ejecutivo (2-3 párrafos)
+            2. Puntos clave identificados
+            3. Recomendaciones para una startup
+            4. Posibles casos de uso
             
             Contenido:
-            {text[:4000]}  # Primeros 4000 caracteres
+            {content[:3000]}
             
-            Proporciona:
-            1. **Tipo de documento**: ¿Qué tipo de documento es?
-            2. **Resumen ejecutivo**: Resumen en 2-3 párrafos
-            3. **Puntos clave**: 5 puntos más importantes
-            4. **Fortalezas identificadas**: Qué está bien
-            5. **Áreas de mejora**: Qué se puede mejorar
-            6. **Recomendaciones**: 3 acciones específicas
+            Responde en español con formato estructurado.
             """,
             
-            'improvement': f"""
-            Actúa como consultor experto y analiza este documento para mejorarlo.
+            'en': f"""
+            Analyze the following content from a {file_type} file and provide:
+            1. Executive summary (2-3 paragraphs)
+            2. Key points identified
+            3. Recommendations for a startup
+            4. Possible use cases
             
-            Documento: {filename}
+            Content:
+            {content[:3000]}
             
-            Contenido:
-            {text[:4000]}
-            
-            Proporciona análisis detallado:
-            1. **Fortalezas actuales**: Qué funciona bien
-            2. **Debilidades identificadas**: Problemas específicos
-            3. **Mejoras estructurales**: Cómo reorganizar
-            4. **Mejoras de contenido**: Qué añadir/quitar
-            5. **Plan de acción**: 5 pasos para mejorar
-            6. **Versión mejorada**: Propuesta de estructura mejor
-            """,
-            
-            'reference': f"""
-            Este documento se usará como referencia. Analiza y extrae información útil.
-            
-            Documento: {filename}
-            
-            Contenido:
-            {text[:4000]}
-            
-            Extrae:
-            1. **Información clave**: Datos importantes
-            2. **Métricas y números**: Cifras relevantes
-            3. **Conceptos aplicables**: Ideas que se pueden usar
-            4. **Referencias útiles**: Fuentes o contactos
-            5. **Aplicación práctica**: Cómo usar esta información
+            Respond in English with structured format.
             """
         }
         
-        prompt = analysis_prompts.get(purpose, analysis_prompts['analysis'])
+        prompt = analysis_prompts.get(user_language, analysis_prompts['en'])
         
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(
             prompt,
             generation_config={
                 "temperature": 0.5,
-                "max_output_tokens": 2000,
+                "max_output_tokens": 1000,
             }
         )
         
         return {
-            "analysis_type": purpose,
-            "analysis_content": response.text,
-            "analyzed_at": datetime.now().isoformat(),
-            "analysis_length": len(response.text)
+            'summary': response.text,
+            'analyzed_at': datetime.now().isoformat(),
+            'content_type': file_type,
+            'language': user_language
         }
         
     except Exception as e:
-        print(f"❌ Error analyzing document: {e}")
+        print(f"❌ Error analyzing file: {e}")
         return {
-            "analysis_type": purpose,
-            "analysis_content": f"Error analizando documento: {str(e)}",
-            "analyzed_at": datetime.now().isoformat(),
-            "error": True
+            'summary': 'Could not analyze file content',
+            'error': str(e)
         }
 
-@app.route('/documents/uploaded', methods=['GET'])
+@app.route('/feedback', methods=['POST'])
 @require_auth
-def get_uploaded_documents(user):
-    """Obtiene documentos subidos por el usuario"""
+def submit_feedback(user):
+    """Enviar feedback del usuario - CON DETECCIÓN DE IDIOMA"""
     try:
-        project_id = request.args.get('project_id')
+        data = request.get_json()
         
-        base_query = """
-            SELECT id, title, created_at, metadata
-            FROM generated_documents 
-            WHERE user_id = :user_id AND document_type = 'uploaded_document'
-        """
+        # Detectar idioma del feedback
+        feedback_text = data.get('feedback', '')
+        detected_language = detect_user_language(feedback_text)
         
-        params = {"user_id": user['id']}
+        messages = {
+            'es': {
+                'feedback_required': 'El feedback es requerido',
+                'feedback_saved': 'Gracias por tu feedback'
+            },
+            'en': {
+                'feedback_required': 'Feedback is required',
+                'feedback_saved': 'Thank you for your feedback'
+            }
+        }
         
-        if project_id:
-            base_query += " AND JSON_EXTRACT(metadata, '$.project_id') = :project_id"
-            params["project_id"] = project_id
+        msgs = messages.get(detected_language, messages['en'])
         
-        base_query += " ORDER BY created_at DESC"
+        if not data or not feedback_text:
+            return jsonify({'error': msgs['feedback_required']}), 400
+        
+        # Guardar feedback
+        feedback_id = str(uuid.uuid4())
         
         with engine.connect() as conn:
-            result = conn.execute(text(base_query), params).fetchall()
-            
-            documents = []
-            for row in result:
-                metadata = json.loads(row[3]) if row[3] else {}
-                
-                documents.append({
-                    'id': str(row[0]),
-                    'title': row[1],
-                    'original_filename': metadata.get('original_filename', 'Unknown'),
-                    'file_size': metadata.get('file_size', 0),
-                    'file_type': metadata.get('file_type', 'unknown'),
-                    'purpose': metadata.get('purpose', 'general'),
-                    'word_count': metadata.get('word_count', 0),
-                    'uploaded_at': row[2].isoformat(),
-                    'has_analysis': 'analysis' in metadata,
-                    'view_url': f'/documents/{row[0]}/view'
-                })
+            conn.execute(
+                text("""
+                    INSERT INTO user_feedback (
+                        id, user_id, feedback_type, feedback_text, 
+                        rating, metadata, created_at
+                    ) VALUES (
+                        :id, :user_id, :feedback_type, :feedback_text,
+                        :rating, :metadata, NOW()
+                    )
+                """),
+                {
+                    "id": feedback_id,
+                    "user_id": user['id'],
+                    "feedback_type": data.get('type', 'general'),
+                    "feedback_text": feedback_text,
+                    "rating": data.get('rating'),
+                    "metadata": json.dumps({
+                        "source": data.get('source', 'web'),
+                        "context": data.get('context', {}),
+                        "user_agent": request.headers.get('User-Agent', ''),
+                        "detected_language": detected_language
+                    })
+                }
+            )
+            conn.commit()
+        
+        # Analizar sentimiento del feedback
+        sentiment = analyze_feedback_sentiment(feedback_text, detected_language)
         
         return jsonify({
             'success': True,
-            'uploaded_documents': documents,
-            'total_count': len(documents)
+            'message': msgs['feedback_saved'],
+            'feedback_id': feedback_id,
+            'sentiment_analysis': sentiment,
+            'detected_language': detected_language
         })
         
     except Exception as e:
-        print(f"❌ Error getting uploaded documents: {e}")
-        return jsonify({'error': 'Could not get uploaded documents'}), 500
+        print(f"❌ Error submitting feedback: {e}")
+        return jsonify({'error': 'Could not submit feedback'}), 500
+
+def analyze_feedback_sentiment(feedback_text, user_language='en'):
+    """Analiza sentimiento del feedback con Gemini - MULTIIDIOMA"""
+    try:
+        sentiment_prompts = {
+            'es': f"""
+            Analiza el sentimiento del siguiente feedback:
+            
+            "{feedback_text}"
+            
+            Responde con:
+            1. Sentimiento general: Positivo/Neutral/Negativo
+            2. Puntuación de sentimiento: 0-10
+            3. Temas principales mencionados
+            4. Sugerencias de mejora identificadas
+            
+            Formato JSON en español.
+            """,
+            
+            'en': f"""
+            Analyze the sentiment of the following feedback:
+            
+            "{feedback_text}"
+            
+            Respond with:
+            1. Overall sentiment: Positive/Neutral/Negative
+            2. Sentiment score: 0-10
+            3. Main topics mentioned
+            4. Improvement suggestions identified
+            
+            JSON format in English.
+            """
+        }
         
+        prompt = sentiment_prompts.get(user_language, sentiment_prompts['en'])
+        
+        model = genai.GenerativeModel(MODEL_NAME)
+        response = model.generate_content(
+            prompt,
+            generation_config={
+                "temperature": 0.3,
+                "max_output_tokens": 500,
+            }
+        )
+        
+        # Intentar parsear como JSON
+        try:
+            response_text = response.text.strip()
+            if response_text.startswith('```json'):
+                response_text = response_text[7:-3]
+            elif response_text.startswith('```'):
+                response_text = response_text[3:-3]
+            
+            return json.loads(response_text)
+        except:
+            return {
+                'sentiment': 'analyzed',
+                'raw_analysis': response.text
+            }
+        
+    except Exception as e:
+        print(f"❌ Error analyzing sentiment: {e}")
+        return {
+            'sentiment': 'error',
+            'error': str(e)
+        }
+
+@app.route('/analytics/usage', methods=['GET'])
+@require_auth
+def get_usage_analytics(user):
+    """Obtener analytics de uso del usuario"""
+    try:
+        with engine.connect() as conn:
+            # Uso por día (últimos 30 días)
+            daily_usage = conn.execute(
+                text("""
+                    SELECT DATE(created_at) as date, 
+                           COUNT(*) as interactions,
+                           SUM(credits_charged) as credits_used
+                    FROM neural_interactions
+                    WHERE user_id = :user_id 
+                    AND created_at > NOW() - INTERVAL '30 days'
+                    GROUP BY DATE(created_at)
+                    ORDER BY date DESC
+                """),
+                {"user_id": user['id']}
+            ).fetchall()
+            
+            # Uso por bot
+            bot_usage = conn.execute(
+                text("""
+                    SELECT bot_used, 
+                           COUNT(*) as times_used,
+                           SUM(credits_charged) as total_credits
+                    FROM neural_interactions
+                    WHERE user_id = :user_id
+                    GROUP BY bot_used
+                    ORDER BY times_used DESC
+                """),
+                {"user_id": user['id']}
+            ).fetchall()
+            
+            # Documentos generados
+            documents = conn.execute(
+                text("""
+                    SELECT document_type, 
+                           COUNT(*) as count,
+                           SUM(credits_used) as credits_spent
+                    FROM generated_documents
+                    WHERE user_id = :user_id
+                    GROUP BY document_type
+                """),
+                {"user_id": user['id']}
+            ).fetchall()
+        
+        # Formatear datos
+        daily_data = [{
+            'date': row[0].isoformat(),
+            'interactions': row[1],
+            'credits_used': row[2] or 0
+        } for row in daily_usage]
+        
+        bot_data = [{
+            'bot': row[0],
+            'times_used': row[1],
+            'total_credits': row[2] or 0
+        } for row in bot_usage]
+        
+        document_data = [{
+            'type': row[0],
+            'count': row[1],
+            'credits_spent': row[2] or 0
+        } for row in documents]
+        
+        return jsonify({
+            'success': True,
+            'analytics': {
+                'daily_usage': daily_data,
+                'bot_usage': bot_data,
+                'documents_generated': document_data,
+                'total_credits_used': sum(b['total_credits'] for b in bot_data),
+                'total_interactions': sum(d['interactions'] for d in daily_data),
+                'current_credits': user['credits']
+            }
+        })
+        
+    except Exception as e:
+        print(f"❌ Error getting analytics: {e}")
+        return jsonify({'error': 'Could not get analytics'}), 500
+
 # ==============================================================================
 #           MAIN
 # ==============================================================================
 
 if __name__ == '__main__':
-    print("\n" + "="*60)
-    print("🔥 0BULLSHIT BACKEND V2.0 - CORS KILLER EDITION!")
-    print("="*60)
-    print("✅ CORS completamente arreglado!")
-    print("✅ Chat sessions implementado!")
-    print("✅ Todos los endpoints funcionando!")
-    print("✅ Sistema de autenticación completo!")
-    print("✅ Base de datos conectada!")
-    print("✅ Gemini AI configurado!")
-    print("✅ Sistema de memoria neuronal!")
-    print("✅ Sistema de créditos y suscripciones!")
-    print("="*60)
-    print(f"🚀 Servidor iniciando en puerto {os.environ.get('PORT', 8080)}")
-    print("🌐 Endpoints disponibles:")
-    print("   - GET  /              - Home")
-    print("   - GET  /cors-test     - Test CORS")
-    print("   - GET  /health        - Health check")
-    print("   - POST /auth/register - Registro")
-    print("   - POST /auth/login    - Login")
-    print("   - POST /auth/google   - Google Auth")
-    print("   - GET  /user/profile  - Perfil usuario")
-    print("   - GET  /credits/balance - Balance créditos")
-    print("   - POST /chat/bot      - Chat con bot")
-    print("   - POST /chat/new      - Nueva conversación")
-    print("   - GET  /chat/history  - Historial")
-    print("   - GET  /chat/stats    - Estadísticas chat")
-    print("   - GET  /projects      - Proyectos")
-    print("   - GET  /bots/available- Bots disponibles")
-    print("   - POST /subscription/upgrade - Upgrade plan")
-    print("   - GET  /admin/users   - Admin: usuarios")
-    print("="*60)
-    print("🎯 CORS KILLER ESTÁ ACTIVO - NO MÁS PROBLEMAS!")
-    print("💡 Para testear CORS: GET /cors-test")
-    print("🔐 Autenticación: Bearer Token en Authorization header")
-    print("🤖 AI: Gemini 2.0 Flash integrado")
-    print("🗄️ Base de datos: PostgreSQL/Supabase")
-    print("="*60)
-    
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=True)
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=False)
