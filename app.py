@@ -42,6 +42,7 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+
 # Google Auth
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
@@ -4031,6 +4032,255 @@ def require_plan(required_plan):
             return f(user, *args, **kwargs)
         return decorated_function
     return decorator
+
+@app.route('/investors/<investor_id>/employees', methods=['GET'])
+@require_auth
+@require_plan('growth')
+def get_fund_employees(user, investor_id):
+    """
+    Obtiene empleados de un fondo específico por investor_id
+    Se usa cuando el usuario hace click en "Find Employees from fund"
+    """
+    try:
+        print(f"🔍 Getting employees for investor: {investor_id}")
+        
+        # 1. Obtener información del investor
+        investor_info = get_investor_by_id(investor_id)
+        if not investor_info:
+            return jsonify({
+                "error": "Investor not found",
+                "success": False
+            }), 404
+        
+        company_name = investor_info.get('Company_Name')
+        if not company_name:
+            return jsonify({
+                "error": "No company name found for this investor",
+                "success": False
+            }), 400
+        
+        print(f"🏢 Searching employees for company: {company_name}")
+        
+        # 2. Verificar créditos (costo fijo por búsqueda de empleados de un fondo)
+        cost_per_search = 50  # Costo fijo por buscar empleados de un fondo
+        user_credits = get_user_credits(user['id'])
+        
+        if user_credits < cost_per_search:
+            return jsonify({
+                "error": "insufficient_credits",
+                "required": cost_per_search,
+                "available": user_credits,
+                "message": "Need 50 credits to find employees from fund"
+            }), 402
+        
+        # 3. Buscar empleados de este fondo específico
+        employees = find_employees_by_company_name(company_name)
+        
+        if not employees:
+            return jsonify({
+                "investor": {
+                    "id": investor_id,
+                    "company_name": company_name,
+                    "description": investor_info.get('Company_Description', '')
+                },
+                "employees": [],
+                "total_found": 0,
+                "message": f"No employees found for {company_name}",
+                "credits_charged": 0,
+                "success": True
+            })
+        
+        # 4. Cobrar créditos
+        charge_success = charge_credits(user['id'], cost_per_search)
+        if not charge_success:
+            return jsonify({
+                "error": "Could not charge credits"
+            }), 500
+        
+        # 5. Formatear respuesta SIMPLIFICADA
+        formatted_employees = format_fund_employees_simple(employees)
+        
+        result = {
+            "investor": {
+                "id": investor_id,
+                "company_name": company_name,
+                "description": investor_info.get('Company_Description', ''),
+                "location": investor_info.get('Company_Location', ''),
+                "linkedin": investor_info.get('Company_Linkedin', ''),
+                "investing_stages": investor_info.get('Investing_Stage', ''),
+                "investment_categories": investor_info.get('Investment_Categories', '')
+            },
+            "employees": formatted_employees,
+            "total_found": len(formatted_employees),
+            "credits_charged": cost_per_search,
+            "credits_remaining": get_user_credits(user['id']),
+            "success": True,
+            "search_timestamp": datetime.now().isoformat()
+        }
+        
+        print(f"✅ Found {len(formatted_employees)} employees for {company_name}")
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"❌ Error getting fund employees: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "error": "Could not get fund employees",
+            "details": str(e),
+            "success": False
+        }), 500
+
+def get_investor_by_id(investor_id):
+    """Obtiene información del investor por ID"""
+    try:
+        query = """
+        SELECT id, "Company_Name", "Company_Description", "Company_Location",
+               "Investing_Stage", "Investment_Categories", "Company_Linkedin"
+        FROM investors 
+        WHERE id = %s
+        """
+        
+        result = pd.read_sql(query, engine, params=[investor_id])
+        
+        if result.empty:
+            return None
+        
+        return result.iloc[0].to_dict()
+        
+    except Exception as e:
+        print(f"❌ Error getting investor: {e}")
+        return None
+
+def find_employees_by_company_name(company_name):
+    """
+    Encuentra TODOS los empleados de una empresa específica
+    """
+    try:
+        query = """
+        SELECT 
+            id,
+            "fullName" as full_name,
+            "headline" as headline,
+            "current_job_title" as job_title,
+            "location" as location,
+            "linkedinUrl" as linkedin_url,
+            "email" as email,
+            "profilePic" as profile_pic,
+            "Company_Name" as company_name,
+            "decision_score" as decision_score
+        FROM employees 
+        WHERE "Company_Name" = %s
+        AND "fullName" IS NOT NULL 
+        AND "fullName" != ''
+        ORDER BY "decision_score" DESC NULLS LAST
+        """
+        
+        result = pd.read_sql(query, engine, params=[company_name])
+        
+        if result.empty:
+            return []
+        
+        # Convertir decision_score a numérico
+        result['decision_score'] = pd.to_numeric(result['decision_score'], errors='coerce').fillna(0)
+        
+        return result.to_dict('records')
+        
+    except Exception as e:
+        print(f"❌ Error finding employees: {e}")
+        return []
+
+def format_fund_employees_simple(employees):
+    """
+    Formatea empleados para el frontend - VERSIÓN SIMPLIFICADA
+    """
+    try:
+        formatted = []
+        
+        for employee in employees:
+            formatted_employee = {
+                'id': str(employee['id']),
+                'full_name': employee.get('full_name', ''),
+                'headline': employee.get('headline', ''),
+                'job_title': employee.get('job_title', ''),
+                'location': employee.get('location', ''),
+                'linkedin_url': employee.get('linkedin_url', ''),
+                'email': employee.get('email', '') if employee.get('email') else None,
+                'profile_pic': employee.get('profile_pic', ''),
+                'company_name': employee.get('company_name', ''),
+                'decision_score': float(employee.get('decision_score', 0))
+            }
+            
+            formatted.append(formatted_employee)
+        
+        # Ordenar por decision_score (ya vienen ordenados de la query)
+        return formatted
+        
+    except Exception as e:
+        print(f"❌ Error formatting employees: {e}")
+        return []
+
+# Endpoint alternativo por Company_Name (si frontend prefiere esto)
+@app.route('/companies/<company_name>/employees', methods=['GET'])
+@require_auth 
+@require_plan('growth')
+def get_employees_by_company_name(user, company_name):
+    """
+    Alternativa: obtener empleados directamente por Company_Name
+    """
+    try:
+        # Decodificar company_name si viene URL-encoded
+        import urllib.parse
+        company_name = urllib.parse.unquote(company_name)
+        
+        print(f"🔍 Getting employees for company: {company_name}")
+        
+        # Verificar créditos
+        cost = 50
+        user_credits = get_user_credits(user['id'])
+        
+        if user_credits < cost:
+            return jsonify({
+                "error": "insufficient_credits",
+                "required": cost,
+                "available": user_credits
+            }), 402
+        
+        # Buscar empleados
+        employees = find_employees_by_company_name(company_name)
+        
+        if not employees:
+            return jsonify({
+                "company_name": company_name,
+                "employees": [],
+                "total_found": 0,
+                "message": f"No employees found for {company_name}",
+                "credits_charged": 0,
+                "success": True
+            })
+        
+        # Cobrar créditos
+        charge_credits(user['id'], cost)
+        
+        # Formatear y devolver
+        formatted_employees = format_fund_employees_simple(employees)
+        
+        return jsonify({
+            "company_name": company_name,
+            "employees": formatted_employees,
+            "total_found": len(formatted_employees),
+            "credits_charged": cost,
+            "credits_remaining": get_user_credits(user['id']),
+            "success": True
+        })
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return jsonify({
+            "error": "Could not get employees",
+            "success": False
+        }), 500
+                   
 # ==============================================================================
 #           MAIN
 # ==============================================================================
