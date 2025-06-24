@@ -1681,6 +1681,10 @@ def generate_professional_document_in_chat(user_id, project_id, document_type, u
 #           BOT SYSTEM
 # ==============================================================================
 
+# ==============================================================================
+#           BOT SYSTEM - VERSIÓN CORREGIDA
+# ==============================================================================
+
 class BotManager:
     def process_user_request(self, user_input, user_context, user_id):
         """Procesa request del usuario con tracking correcto de créditos"""
@@ -1750,8 +1754,7 @@ class BotManager:
             traceback.print_exc()
             return {'error': f'Bot error: {str(e)}'}
 
-                    
-   def _build_smart_prompt(self, user_input, user_context):
+    def _build_smart_prompt(self, user_input, user_context):
         """Prompt inteligente para respuestas naturales y contextuales"""
         business_context = user_context.get('business_context', {})
         user_plan = user_context.get('user_plan', 'free')
@@ -2948,10 +2951,16 @@ def chat_with_bot(user):
             print(f"❌ Error detecting document intent: {doc_error}")
             wants_document = False
 
-# ============================================================================
-#   SI DETECTA GENERACIÓN DE DOCUMENTO - MANEJAR POR SEPARADO
-# ============================================================================
-        if not document_type:
+        # ============================================================================
+        #   SI DETECTA GENERACIÓN DE DOCUMENTO - MANEJAR POR SEPARADO
+        # ============================================================================
+        if wants_document:
+            print(f"📄 Usuario quiere generar documento!")
+            
+            # Identificar tipo de documento
+            document_type = identify_document_type(user_message, detected_language)
+            
+            if not document_type:
                 # Preguntar qué documento quiere
                 ask_messages = {
                     'es': """¡Perfecto! ¿Qué documento necesitas?
@@ -3000,25 +3009,6 @@ Just tell me which one and I'll generate it professionally."""
             doc_response['detected_language'] = detected_language
             
             return jsonify(doc_response)
-    
-    # Generar documento profesional
-    doc_response = generate_professional_document_in_chat(
-        user_id=user['id'],
-        project_id=project_id,
-        document_type=document_type,
-        user_context=enhanced_context,
-        user_language=detected_language
-    )
-    
-    # Añadir IDs de sesión y proyecto
-    doc_response['session_id'] = session_id
-    doc_response['project_id'] = project_id
-    doc_response['detected_language'] = detected_language
-    
-    return jsonify(doc_response)
-                                
-
-        
 
         # ============================================================================
         #   SI DETECTA BÚSQUEDA DE INVERSORES - MANEJAR POR SEPARADO
@@ -3202,7 +3192,7 @@ Want me to find specific employees from any of these funds?"""
                         'investors_found': len(investors_found),
                         'investors_saved': saved_count,
                         'search_query': user_message,
-                        'investors_preview': investors_found  # Primeros 3 para el frontend
+                        'investors_preview': investors_found[:3]  # Primeros 3 para el frontend
                     })
                     
                 except Exception as search_error:
@@ -3241,11 +3231,7 @@ There was a technical problem executing the search.
                     })
 
         # ============================================================================
-        #   FLUJO NORMAL DEL BOT (cuando NO quiere buscar inversores)
-        # ============================================================================
-        
-        # ============================================================================
-        #   FLUJO NORMAL DEL BOT (cuando NO quiere buscar inversores)
+        #   FLUJO NORMAL DEL BOT (cuando NO quiere buscar inversores ni documentos)
         # ============================================================================
         
         # VERIFICAR CRÉDITOS
@@ -3275,19 +3261,18 @@ There was a technical problem executing the search.
                 'detected_language': detected_language
             }), 402
 
-
         # INYECTAR ROADMAP INTELIGENTE EN CONTEXTO
-        if user_context.get('business_context', {}).get('stage'):
-            roadmap = bot_manager.get_startup_roadmap(user_context)
+        if enhanced_context.get('business_context', {}).get('stage'):
+            roadmap = bot_manager.get_startup_roadmap(enhanced_context)
             
             # Solo mostrar roadmap cada 5 mensajes o si preguntan por "next steps"
-            message_count = user_context.get('total_interactions', 0)
+            message_count = enhanced_context.get('total_interactions', 0)
             asks_for_guidance = any(word in user_message.lower() for word in 
                 ['next', 'siguiente', 'paso', 'step', 'ahora', 'now', 'qué hago', 'what do'])
             
             if message_count % 5 == 0 or asks_for_guidance:
-                user_context['show_roadmap'] = True
-                user_context['roadmap'] = roadmap
+                enhanced_context['show_roadmap'] = True
+                enhanced_context['roadmap'] = roadmap
                          
         # PROCESAR CON BOT MANAGER
         response = bot_manager.process_user_request(
