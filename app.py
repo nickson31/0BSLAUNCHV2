@@ -2477,115 +2477,143 @@ def chat_with_bot(user):
         
         # DETECTAR INTENCIÓN DE BÚSQUEDA DE INVERSORES
         user_message = data.get('message', '')
-        wants_investor_search = detect_investor_search_intent(
-            user_message, 
-            enhanced_context.get('user_language', 'en')
-        )
-
-        # Si detecta búsqueda de inversores, dar respuesta específica
-if wants_investor_search:
-    print(f"🎯 Usuario quiere buscar inversores!")
-    
-    # Verificar si tiene plan adecuado
-    if user.get('plan', 'free') == 'free':
-        # Sugerir upgrade con ejemplo
-        upgrade_messages = {
-            'es': f"""
-            ¡Perfecto! Quieres buscar inversores específicos. 
-
-            **Para buscar inversores necesitas el plan Growth:**
-            
-            🔍 **Con Growth Plan obtienes:**
-            - Búsqueda ML de 20+ inversores específicos
-            - Filtros por industria, etapa, ubicación
-            - 100,000 créditos de lanzamiento
-            - Solo €20/mes
-            
-            **Ejemplo de búsqueda:**
-            - "fintech seed Madrid" → 15 inversores específicos
-            - "healthtech Series A London" → 12 fondos relevantes
-            
-            ¿Quieres que upgrade tu plan para buscar inversores ahora?
-            """,
-            'en': f"""
-            Perfect! You want to search for specific investors.
-
-            **To search investors you need Growth Plan:**
-            
-            🔍 **With Growth Plan you get:**
-            - ML search of 20+ specific investors  
-            - Filters by industry, stage, location
-            - 100,000 launch credits
-            - Only €20/month
-            
-            **Search example:**
-            - "fintech seed Madrid" → 15 specific investors
-            - "healthtech Series A London" → 12 relevant funds
-            
-            Want to upgrade your plan to search investors now?
-            """
-        }
+        detected_language = enhanced_context.get('user_language', 'en')
         
-        # Usar el mensaje de upgrade en lugar de la respuesta normal del bot
-        final_response['response'] = upgrade_messages.get(detected_language, upgrade_messages['en'])
-        final_response['investor_search_detected'] = True
-        final_response['upgrade_required'] = True
-        
-    else:
-        # Tiene plan Growth/Pro - guiar a usar la búsqueda
-        search_messages = {
-            'es': f"""
-            ¡Perfecto! Tienes plan {user.get('plan')} - puedes buscar inversores.
+        try:
+            wants_investor_search = detect_investor_search_intent(
+                user_message, 
+                detected_language
+            )
+        except Exception as search_error:
+            print(f"❌ Error detecting investor search intent: {search_error}")
+            wants_investor_search = False
+
+        # ============================================================================
+        #   SI DETECTA BÚSQUEDA DE INVERSORES - MANEJAR POR SEPARADO
+        # ============================================================================
+        if wants_investor_search:
+            print(f"🎯 Usuario quiere buscar inversores!")
             
-            **¿Cómo buscar inversores?**
-            
-            1. **Ve a la sección "Buscar Inversores"** en el menú
-            2. **Escribe tu búsqueda específica**, por ejemplo:
-               - "fintech seed España" 
-               - "SaaS Series A Madrid"
-               - "healthtech angel investors London"
-            
-            3. **Obtén lista de 20 inversores específicos** con:
-               - Nombre del fondo
-               - Descripción
-               - Etapas de inversión  
-               - Categorías de inversión
-               - Ubicación
-               - LinkedIn
-            
-            **💡 Tip:** Cuanto más específica tu búsqueda, mejores resultados obtienes.
-            
-            ¿Quieres que te ayude a definir una búsqueda específica para tu startup?
-            """,
-            'en': f"""
-            Perfect! You have {user.get('plan')} plan - you can search investors.
-            
-            **How to search investors?**
-            
-            1. **Go to "Search Investors" section** in the menu
-            2. **Write your specific search**, for example:
-               - "fintech seed Spain"
-               - "SaaS Series A Madrid" 
-               - "healthtech angel investors London"
-            
-            3. **Get list of 20 specific investors** with:
-               - Fund name
-               - Description
-               - Investment stages
-               - Investment categories
-               - Location
-               - LinkedIn
-            
-            **💡 Tip:** The more specific your search, the better results you get.
-            
-            Want me to help you define a specific search for your startup?
-            """
-        }
-        
-        final_response['response'] = search_messages.get(detected_language, search_messages['en'])
-        final_response['investor_search_detected'] = True
-        final_response['can_search_now'] = True
+            # Verificar si tiene plan adecuado
+            if user.get('plan', 'free') == 'free':
+                # Sugerir upgrade con ejemplo
+                upgrade_messages = {
+                    'es': """¡Perfecto! Quieres buscar inversores específicos. 
+
+**Para buscar inversores necesitas el plan Growth:**
+
+🔍 **Con Growth Plan obtienes:**
+- Búsqueda ML de 20+ inversores específicos
+- Filtros por industria, etapa, ubicación
+- 100,000 créditos de lanzamiento
+- Solo €20/mes
+
+**Ejemplo de búsqueda:**
+- "fintech seed Madrid" → 15 inversores específicos
+- "healthtech Series A London" → 12 fondos relevantes
+
+¿Quieres que upgrade tu plan para buscar inversores ahora?""",
+                    'en': """Perfect! You want to search for specific investors.
+
+**To search investors you need Growth Plan:**
+
+🔍 **With Growth Plan you get:**
+- ML search of 20+ specific investors  
+- Filters by industry, stage, location
+- 100,000 launch credits
+- Only €20/month
+
+**Search example:**
+- "fintech seed Madrid" → 15 specific investors
+- "healthtech Series A London" → 12 relevant funds
+
+Want to upgrade your plan to search investors now?"""
+                }
                 
+                # RETORNAR RESPUESTA DE UPGRADE (sin cobrar créditos)
+                return jsonify({
+                    'success': True,
+                    'bot': 'interactive_mentor',
+                    'response': upgrade_messages.get(detected_language, upgrade_messages['en']),
+                    'credits_charged': 0,
+                    'credits_remaining': get_user_credits(user['id']),
+                    'session_id': session_id,
+                    'project_id': project_id,
+                    'detected_language': detected_language,
+                    'investor_search_detected': True,
+                    'upgrade_required': True,
+                    'upgrade_suggestion': {
+                        'message': 'Actualiza al plan Growth para buscar inversores' if detected_language == 'es' else 'Upgrade to Growth plan to search investors',
+                        'plan': 'growth',
+                        'benefits': ['Búsqueda de inversores con ML', '100k créditos de lanzamiento'] if detected_language == 'es' else ['ML-powered investor search', '100k launch credits']
+                    }
+                })
+                
+            else:
+                # Tiene plan Growth/Pro - guiar a usar la búsqueda
+                search_messages = {
+                    'es': f"""¡Perfecto! Tienes plan {user.get('plan')} - puedes buscar inversores.
+
+**¿Cómo buscar inversores?**
+
+1. **Ve a la sección "Buscar Inversores"** en el menú
+2. **Escribe tu búsqueda específica**, por ejemplo:
+   - "fintech seed España" 
+   - "SaaS Series A Madrid"
+   - "healthtech angel investors London"
+
+3. **Obtén lista de 20 inversores específicos** con:
+   - Nombre del fondo
+   - Descripción
+   - Etapas de inversión  
+   - Categorías de inversión
+   - Ubicación
+   - LinkedIn
+
+**💡 Tip:** Cuanto más específica tu búsqueda, mejores resultados obtienes.
+
+¿Quieres que te ayude a definir una búsqueda específica para tu startup?""",
+                    'en': f"""Perfect! You have {user.get('plan')} plan - you can search investors.
+
+**How to search investors?**
+
+1. **Go to "Search Investors" section** in the menu
+2. **Write your specific search**, for example:
+   - "fintech seed Spain"
+   - "SaaS Series A Madrid" 
+   - "healthtech angel investors London"
+
+3. **Get list of 20 specific investors** with:
+   - Fund name
+   - Description
+   - Investment stages
+   - Investment categories
+   - Location
+   - LinkedIn
+
+**💡 Tip:** The more specific your search, the better results you get.
+
+Want me to help you define a specific search for your startup?"""
+                }
+                
+                # RETORNAR RESPUESTA DE ORIENTACIÓN (sin cobrar créditos)
+                return jsonify({
+                    'success': True,
+                    'bot': 'interactive_mentor',
+                    'response': search_messages.get(detected_language, search_messages['en']),
+                    'credits_charged': 0,
+                    'credits_remaining': get_user_credits(user['id']),
+                    'session_id': session_id,
+                    'project_id': project_id,
+                    'detected_language': detected_language,
+                    'investor_search_detected': True,
+                    'can_search_now': True
+                })
+        
+        # ============================================================================
+        #   FLUJO NORMAL DEL BOT (cuando NO quiere buscar inversores)
+        # ============================================================================
+        
         # VERIFICAR CRÉDITOS
         user_credits_before = get_user_credits(user['id'])
         credits_required = CREDIT_COSTS.get('basic_bot', 5)
@@ -2602,7 +2630,6 @@ if wants_investor_search:
             }
         }
         
-        detected_language = enhanced_context.get('user_language', 'en')
         msgs = error_messages.get(detected_language, error_messages['en'])
         
         if user_credits_before < credits_required:
@@ -2643,31 +2670,10 @@ if wants_investor_search:
             'credits_remaining': get_user_credits(user['id']),
             'session_id': session_id,
             'project_id': project_id,
-            'detected_language': enhanced_context.get('user_language', 'en'),
-            'wants_investor_search': wants_investor_search,
+            'detected_language': detected_language,
+            'investor_search_detected': False,  # Siempre False en este flujo
             'processing_success': response.get('processing_success', True)
         }
-        
-        # Si quiere buscar inversores y no tiene el plan adecuado
-        if wants_investor_search and user.get('plan', 'free') == 'free':
-            upgrade_messages = {
-                'es': {
-                    'message': 'Actualiza al plan Growth para buscar inversores',
-                    'benefits': ['Búsqueda de inversores con ML', '100k créditos de lanzamiento']
-                },
-                'en': {
-                    'message': 'Upgrade to Growth plan to search investors',
-                    'benefits': ['ML-powered investor search', '100k launch credits']
-                }
-            }
-            
-            lang_msgs = upgrade_messages.get(detected_language, upgrade_messages['en'])
-            
-            final_response['upgrade_suggestion'] = {
-                'message': lang_msgs['message'],
-                'plan': 'growth',
-                'benefits': lang_msgs['benefits']
-            }
         
         return jsonify(final_response)
         
