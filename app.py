@@ -20,6 +20,7 @@ import json
 import ast
 import re
 import warnings
+import random
 import time
 import os
 import sqlalchemy
@@ -1875,58 +1876,58 @@ class InvestorSearchSimple:
             # Si falla, devolver con puntuación por defecto
             return df.assign(puntuacion_final=50)
     
-    def _formatear_resultados(self, df, query):
-    """Convierte resultados a formato JSON con SCORES INVENTADOS 72-99"""
-    try:
-        resultados = []
-        
-        for i, (_, inversor) in enumerate(df.iterrows()):
-            # Truncar descripción si es muy larga
-            descripcion = str(inversor['descripcion'])
-            if len(descripcion) > 300:
-                descripcion = descripcion[:300] + '...'
+   def _formatear_resultados(self, df, query):
+        """Convierte resultados a formato JSON con SCORES INVENTADOS 72-99"""
+        try:
+            resultados = []
             
-            # 🎯 SCORE INVENTADO GARANTIZADO ENTRE 72-99
-            import random
-            if i < 5:  # Top 5: scores muy altos
-                match_score = round(random.uniform(89, 99), 1)
-            elif i < 10:  # Siguientes 5: scores altos
-                match_score = round(random.uniform(82, 92), 1)
-            elif i < 15:  # Siguientes 5: scores buenos
-                match_score = round(random.uniform(76, 86), 1)
-            else:  # Resto: scores decentes
-                match_score = round(random.uniform(72, 80), 1)
+            for i, (_, inversor) in enumerate(df.iterrows()):
+                # Truncar descripción si es muy larga
+                descripcion = str(inversor['descripcion'])
+                if len(descripcion) > 300:
+                    descripcion = descripcion[:300] + '...'
+                
+                # 🎯 SCORE INVENTADO GARANTIZADO ENTRE 72-99
+                import random
+                if i < 5:  # Top 5: scores muy altos
+                    match_score = round(random.uniform(89, 99), 1)
+                elif i < 10:  # Siguientes 5: scores altos
+                    match_score = round(random.uniform(82, 92), 1)
+                elif i < 15:  # Siguientes 5: scores buenos
+                    match_score = round(random.uniform(76, 86), 1)
+                else:  # Resto: scores decentes
+                    match_score = round(random.uniform(72, 80), 1)
+                
+                resultado = {
+                    'investor_id': str(inversor['id']),
+                    'company_name': inversor['nombre'],
+                    'description': descripcion,
+                    'location': inversor['ubicacion'],
+                    'investing_stages': inversor['etapas'],
+                    'investment_categories': inversor['categorias'],
+                    'linkedin_url': inversor['linkedin'],
+                    'match_score': match_score  # 🔥 SCORE INVENTADO 72-99
+                }
+                
+                resultados.append(resultado)
             
-            resultado = {
-                'investor_id': str(inversor['id']),
-                'company_name': inversor['nombre'],
-                'description': descripcion,
-                'location': inversor['ubicacion'],
-                'investing_stages': inversor['etapas'],
-                'investment_categories': inversor['categorias'],
-                'linkedin_url': inversor['linkedin'],
-                'match_score': match_score  # 🔥 SCORE INVENTADO 72-99
+            return {
+                'search_type': 'inteligente_v2_demo',
+                'query': query,
+                'results': resultados,
+                'total_found': len(resultados),
+                'max_results': 21,  # 🔥 CAMBIO: 21 en lugar de 20
+                'success': True,
+                'demo_mode': True,  # Indicar que los scores son para demo
+                'score_range': '72-99'  # Para que el frontend sepa
             }
             
-            resultados.append(resultado)
-        
-        return {
-            'search_type': 'inteligente_v2_demo',
-            'query': query,
-            'results': resultados,
-            'total_found': len(resultados),
-            'max_results': 21,  # 🔥 CAMBIO: 21 en lugar de 20
-            'success': True,
-            'demo_mode': True,  # Indicar que los scores son para demo
-            'score_range': '72-99'  # Para que el frontend sepa
-        }
-        
-    except Exception as e:
-        print(f"❌ Error formateando: {e}")
-        return {
-            'error': 'Error formateando resultados',
-            'details': str(e)
-        }
+        except Exception as e:
+            print(f"❌ Error formateando: {e}")
+            return {
+                'error': 'Error formateando resultados',
+                'details': str(e)
+            }
                      
 def save_investors_to_project_simple(user_id, project_id, investors_data):
     """
