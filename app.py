@@ -1876,7 +1876,7 @@ class InvestorSearchSimple:
             # Si falla, devolver con puntuación por defecto
             return df.assign(puntuacion_final=50)
     
-   def _formatear_resultados(self, df, query):
+def _formatear_resultados(self, df, query):
         """Convierte resultados a formato JSON con SCORES INVENTADOS 72-99"""
         try:
             resultados = []
