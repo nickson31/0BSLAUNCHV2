@@ -937,7 +937,7 @@ def get_neural_memory(user_id):
 
 def extract_and_update_project_memory(user_id, project_id, user_input, bot_response):
     """
-    Versión corregida que maneja JSON correctamente
+    Versión corregida que maneja JSON correctamente Y GUARDA INTENCIÓN DETECTADA
     """
     try:
         # Obtener memoria actual del proyecto
@@ -966,9 +966,26 @@ def extract_and_update_project_memory(user_id, project_id, user_input, bot_respo
             except (json.JSONDecodeError, TypeError):
                 current_memory = {}
         
-        # Actualizar memoria (versión simple)
+        # Actualizar memoria con más contexto
         updated_memory = current_memory.copy()
         updated_memory["last_updated"] = datetime.now().isoformat()
+        
+        # NUEVO: Guardar última intención detectada y contexto de búsqueda
+        if "inversores" in bot_response or "investors" in bot_response:
+            updated_memory["last_investor_search"] = {
+                "timestamp": datetime.now().isoformat(),
+                "query": user_input,
+                "detected_intent": "investor_search",
+                "response_preview": bot_response[:200]
+            }
+        
+        # Detectar si es un Startup Profile
+        if "startup profile" in user_input.lower() or "**sector:**" in user_input.lower():
+            updated_memory["startup_profile_provided"] = {
+                "timestamp": datetime.now().isoformat(),
+                "profile_text": user_input,
+                "parsed_data": extract_business_info(user_input)
+            }
         
         # Guardar memoria actualizada - CONVERTIR A STRING JSON
         with engine.connect() as conn:
@@ -1344,11 +1361,11 @@ def generate_context_summary(business_context, recent_chats):
         return "Error generando resumen de contexto"
 
 def detect_investor_search_intent(user_message, user_language='en'):
-    """Detecta si el usuario quiere buscar inversores ESPECÍFICOS usando Gemini - VERSIÓN MEJORADA"""
+    """Detecta si el usuario quiere buscar inversores ESPECÍFICOS usando Gemini - VERSIÓN CORREGIDA"""
     try:
         detection_prompts = {
             'es': f"""
-            Analiza si el usuario quiere BUSCAR INVERSORES ESPECÍFICOS (no solo consejos):
+            Analiza si el usuario quiere BUSCAR INVERSORES ESPECÍFICOS para su startup:
             "{user_message}"
             
             Responde SOLO 'true' o 'false'.
@@ -1356,23 +1373,23 @@ def detect_investor_search_intent(user_message, user_language='en'):
             ✅ SÍ es búsqueda de inversores (responde 'true'):
             - "Buscar inversores para fintech"
             - "Encuentrame VCs de Madrid" 
-            - "Necesito lista de fondos"
-            - "Mostrar inversores seed"
-            - "Tabla de inversores"
-            - "Ver inversores disponibles"
-            - "Busca fondos de inversión"
-            - "Quiero contactos de VCs"
+            - "Necesito inversores"
+            - "Startup Profile for Investor Matching"
+            - Cualquier descripción que incluya: "funding", "Series A/B/C", "seed", "€", "$", "million", "ARR"
+            - Descripciones detalladas de startups con métricas o industria
+            - "I need investors for my..."
+            - Texto estructurado con información de startup (sector, modelo, etc)
             
             ❌ NO es búsqueda (responde 'false'):
-            - "Cómo convencer a inversores"
-            - "Qué buscan los inversores"
-            - "Estrategia para inversores"
-            - "Consejos para pitch"
-            - "Preparar reunión con VC"
+            - "Genera un pitch deck"
+            - "Crea un documento"
+            - "Escribe un plan"
+            - "Cómo convencer inversores" (consejo, no búsqueda)
+            - Preguntas teóricas sobre inversión
             """,
             
             'en': f"""
-            Analyze if the user wants to SEARCH FOR SPECIFIC INVESTORS (not just advice):
+            Analyze if user wants to SEARCH FOR SPECIFIC INVESTORS for their startup:
             "{user_message}"
             
             Respond ONLY with 'true' or 'false'.
@@ -1380,19 +1397,19 @@ def detect_investor_search_intent(user_message, user_language='en'):
             ✅ YES it's investor search (respond 'true'):
             - "Search for fintech investors"
             - "Find VCs in London"
-            - "Need list of funds"
-            - "Show seed investors"
-            - "Investor table"
-            - "See available investors"
-            - "Search investment funds"
-            - "Want VC contacts"
+            - "I need investors"
+            - "Startup Profile for Investor Matching"
+            - Any description including: "funding", "Series A/B/C", "seed", "€", "$", "million", "ARR"
+            - Detailed startup descriptions with metrics or industry
+            - "I need investors for my..."
+            - Structured text with startup info (sector, model, etc)
             
             ❌ NO it's not search (respond 'false'):
-            - "How to convince investors"
-            - "What investors look for"
-            - "Investor strategy"
-            - "Pitch advice"
-            - "Prepare VC meeting"
+            - "Generate a pitch deck"
+            - "Create a document"
+            - "Write a plan"
+            - "How to convince investors" (advice, not search)
+            - Theoretical questions about investment
             """
         }
         
@@ -1402,40 +1419,51 @@ def detect_investor_search_intent(user_message, user_language='en'):
         response = model.generate_content(
             prompt,
             generation_config={
-                "temperature": 0.1,  # Muy bajo para respuestas consistentes
+                "temperature": 0.1,
                 "max_output_tokens": 10,
             }
         )
         
         result = response.text.strip().lower() == 'true'
         
+        # FALLBACK MEJORADO: Si Gemini falla, buscar patrones específicos
+        if not result:
+            # Patrones que SIEMPRE indican búsqueda de inversores
+            strong_investor_patterns = [
+                'startup profile for investor',
+                'need investors for',
+                'looking for.*funding',
+                'series [a-c]',
+                'seeking.*investment',
+                '\\d+.*million.*arr',
+                'funding.*needed',
+                'investor matching'
+            ]
+            
+            message_lower = user_message.lower()
+            for pattern in strong_investor_patterns:
+                if re.search(pattern, message_lower):
+                    result = True
+                    print(f"🔄 Fallback pattern matched: {pattern}")
+                    break
+        
         print(f"🤖 Intent detection: '{user_message[:50]}...' → {result}")
         return result
         
     except Exception as e:
         print(f"❌ Error detecting investor search intent: {e}")
-        # Fallback: buscar keywords específicas de BÚSQUEDA
-        search_keywords = [
-            'buscar', 'encontrar', 'search', 'find', 'lista', 'list', 
-            'tabla', 'table', 'mostrar', 'show', 'ver', 'see',
-            'contactos', 'contacts', 'directorio', 'directory'
-        ]
-        investor_keywords = [
-            'inversor', 'investor', 'vc', 'fondo', 'fund', 'capital', 'angel'
-        ]
-        
+        # Fallback más agresivo
+        investor_keywords = ['investor', 'funding', 'series', 'seed', 'vc', 'capital']
         message_lower = user_message.lower()
-        has_search = any(keyword in message_lower for keyword in search_keywords)
-        has_investor = any(keyword in message_lower for keyword in investor_keywords)
-        
-        # Solo si tiene AMBOS: palabras de búsqueda + investor
-        fallback_result = has_search and has_investor
-        print(f"🔄 Fallback detection: {fallback_result}")
-        return fallback_result
+        return any(keyword in message_lower for keyword in investor_keywords)
 
 def detect_document_generation_intent(user_message, user_language='en'):
-    """Detecta si el usuario quiere generar un documento profesional"""
+    """Detecta si el usuario quiere generar un documento profesional - VERSIÓN MEJORADA"""
     try:
+        # IMPORTANTE: Si ya menciona inversores, NO es documento
+        if 'investor' in user_message.lower() or 'funding' in user_message.lower():
+            return False
+            
         detection_prompts = {
             'es': f"""
             Analiza si el usuario quiere que GENERES un DOCUMENTO profesional:
@@ -1448,13 +1476,12 @@ def detect_document_generation_intent(user_message, user_language='en'):
             - "Genera un plan de negocios"
             - "Crea un plan de marketing"
             - "Redacta el modelo financiero"
-            - "Necesito un executive summary"
-            - "Escribe un business plan"
+            - Uso explícito de verbos: "genera", "crea", "hazme", "escribe"
             
             ❌ NO es documento (responde 'false'):
-            - "Qué incluye un pitch deck"
-            - "Consejos para pitch"
-            - "Cómo hacer un plan"
+            - Cualquier mención de "inversores" o "funding"
+            - "Startup Profile for Investor Matching"
+            - Descripciones de negocio sin pedir documento
             - Preguntas generales
             """,
             
@@ -1469,13 +1496,12 @@ def detect_document_generation_intent(user_message, user_language='en'):
             - "Generate a business plan"
             - "Create a marketing plan"
             - "Write the financial model"
-            - "I need an executive summary"
-            - "Draft a business plan"
+            - Explicit use of verbs: "generate", "create", "make", "write"
             
             ❌ NO document (respond 'false'):
-            - "What's in a pitch deck"
-            - "Tips for pitching"
-            - "How to make a plan"
+            - Any mention of "investors" or "funding"
+            - "Startup Profile for Investor Matching"
+            - Business descriptions without asking for document
             - General questions
             """
         }
@@ -2106,9 +2132,9 @@ class InvestorSearchSimple:
             
             # PESOS AJUSTADOS - Ubicación más importante por regulaciones
             WEIGHTS = {
-                'ubicacion': 0.45,  # 45% por regulaciones
-                'etapa': 0.30,      # 30% 
-                'categoria': 0.25   # 25%
+                'ubicacion': 0.334,  # 45% por regulaciones
+                'etapa': 0.333,      # 30% 
+                'categoria': 0.333   # 25%
             }
             
             scores = []
@@ -2339,11 +2365,11 @@ def create_investors_table_for_chat(investors, language='en'):
             table_lines.append("| " + " | ".join(row) + " |")
             
             # Solo mostrar primeros 10 en el chat
-            if i >= 10:
+            if i >= 21:
                 break
         
         # Si hay más de 10, agregar nota
-        if len(investors) > 10:
+        if len(investors) < 10:
             if language == 'es':
                 table_lines.append(f"\n*...y {len(investors) - 10} inversores más guardados en tu página de Inversores*")
             else:
@@ -2945,10 +2971,16 @@ def chat_with_bot(user):
             wants_investor_search = False
 
         # Detectar si quiere generar documento
+    if not wants_investor_search:
         try:
             wants_document = detect_document_generation_intent(user_message, detected_language)
         except Exception as doc_error:
             print(f"❌ Error detecting document intent: {doc_error}")
+            wants_document = False
+    else:
+        wants_document = False  # Si busca inversores, NUNCA puede ser documento
+
+    print(f"📊 Detección final - Inversores: {wants_investor_search}, Documento: {wants_document}")ocument intent: {doc_error}")
             wants_document = False
 
         # ============================================================================
@@ -3152,32 +3184,11 @@ Want me to try a broader search?"""
                     
                     # 6. CREAR TABLA PARA MOSTRAR EN EL CHAT (solo primeros 10)
                     investors_table = create_investors_table_for_chat(
-                        investors_found[:10],  # Solo primeros 10 en chat
+                        investors_found[:21],  # Solo primeros 10 en chat
                         detected_language
                     )
                     
-                    # 7. RESPUESTA CON TABLA EN EL CHAT
-                    success_messages = {
-                        'es': f"""🎯 **Encontré {len(investors_found)} inversores para tu startup:**
-
-{investors_table}
-
-✅ **{saved_count} inversores guardados** en tu página "Inversores" (sidebar)
-💰 **Créditos:** {credits_cost} cobrados | {credits_after} restantes
-📊 **Tip:** Ve a "Inversores" en el menú para ver todos los detalles y contactos
-
-¿Quieres que busque empleados específicos de alguno de estos fondos?""",
-                        
-                        'en': f"""🎯 **Found {len(investors_found)} investors for your startup:**
-
-{investors_table}
-
-✅ **{saved_count} investors saved** to your "Investors" page (sidebar)
-💰 **Credits:** {credits_cost} charged | {credits_after} remaining  
-📊 **Tip:** Go to "Investors" in menu to see all details and contacts
-
-Want me to find specific employees from any of these funds?"""
-                    }
+            
                     
                     return jsonify({
                         'success': True,
@@ -3192,7 +3203,8 @@ Want me to find specific employees from any of these funds?"""
                         'investors_found': len(investors_found),
                         'investors_saved': saved_count,
                         'search_query': user_message,
-                        'investors_preview': investors_found[:3]  # Primeros 3 para el frontend
+                        'investors_data': investors_found, 
+                        'investors_table': investors_table
                     })
                     
                 except Exception as search_error:
