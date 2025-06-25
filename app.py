@@ -2971,17 +2971,16 @@ def chat_with_bot(user):
             wants_investor_search = False
 
         # Detectar si quiere generar documento
-    if not wants_investor_search:
         try:
-            wants_document = detect_document_generation_intent(user_message, detected_language)
+            if not wants_investor_search:
+                wants_document = detect_document_generation_intent(user_message, detected_language)
+            else:
+                wants_document = False  # Si busca inversores, NUNCA puede ser documento
         except Exception as doc_error:
             print(f"❌ Error detecting document intent: {doc_error}")
             wants_document = False
-    else:
-        wants_document = False  # Si busca inversores, NUNCA puede ser documento
 
-    print(f"📊 Detección final - Inversores: {wants_investor_search}, Documento: {wants_document}, Document intent: {doc_error}")
-            wants_document = False
+        print(f"📊 Detección final - Inversores: {wants_investor_search}, Documento: {wants_document}")
 
         # ============================================================================
         #   SI DETECTA GENERACIÓN DE DOCUMENTO - MANEJAR POR SEPARADO
