@@ -5381,6 +5381,29 @@ def get_investor_by_id(investor_id):
         print(f"❌ Error getting investor: {e}")
         return None
 
+def get_investor_by_company_name(company_name):
+    """Obtiene información del investor/fondo por Company_Name"""
+    try:
+        query = """
+        SELECT id, "Company_Name", "Company_Description", "Company_Location",
+               "Investing_Stage", "Investment_Categories", "Company_Linkedin",
+               "Company_Website", "Company_Email"
+        FROM investors 
+        WHERE "Company_Name" = %s
+        LIMIT 1
+        """
+        
+        result = pd.read_sql(query, engine, params=[company_name])
+        
+        if result.empty:
+            return None
+        
+        return result.iloc[0].to_dict()
+        
+    except Exception as e:
+        print(f"❌ Error getting investor by company name: {e}")
+        return None
+                         
 def find_employees_by_company_name(company_name):
     """
     Encuentra TODOS los empleados de una empresa específica
@@ -5455,14 +5478,15 @@ def format_fund_employees_simple(employees):
 @require_plan('growth')
 def get_employees_by_company_name(user, company_name):
     """
-    Alternativa: obtener empleados directamente por Company_Name
+    MEJORADO: obtener empleados + información del fondo por Company_Name
+    Perfecto para página de Find Employees con fondo arriba + empleados abajo
     """
     try:
         # Decodificar company_name si viene URL-encoded
         import urllib.parse
         company_name = urllib.parse.unquote(company_name)
         
-        print(f"🔍 Getting employees for company: {company_name}")
+        print(f"🔍 Getting fund info + employees for: {company_name}")
         
         # Verificar créditos
         cost = 50
@@ -5475,38 +5499,70 @@ def get_employees_by_company_name(user, company_name):
                 "available": user_credits
             }), 402
         
-        # Buscar empleados
+        # 1. BUSCAR INFORMACIÓN DEL FONDO/INVESTOR
+        fund_info = get_investor_by_company_name(company_name)
+        
+        # 2. BUSCAR EMPLEADOS
         employees = find_employees_by_company_name(company_name)
         
+        # Si no hay empleados, aún cobrar créditos por la búsqueda
         if not employees:
+            charge_credits(user['id'], cost)
+            
             return jsonify({
-                "company_name": company_name,
+                "fund": {
+                    "company_name": company_name,
+                    "found": fund_info is not None,
+                    "description": fund_info.get('Company_Description', '') if fund_info else '',
+                    "location": fund_info.get('Company_Location', '') if fund_info else '',
+                    "linkedin": fund_info.get('Company_Linkedin', '') if fund_info else '',
+                    "website": fund_info.get('Company_Website', '') if fund_info else '',
+                    "investing_stages": fund_info.get('Investing_Stage', '') if fund_info else '',
+                    "investment_categories": fund_info.get('Investment_Categories', '') if fund_info else ''
+                },
                 "employees": [],
-                "total_found": 0,
+                "total_employees": 0,
                 "message": f"No employees found for {company_name}",
-                "credits_charged": 0,
+                "credits_charged": cost,
+                "credits_remaining": get_user_credits(user['id']),
                 "success": True
             })
         
-        # Cobrar créditos
+        # 3. COBRAR CRÉDITOS
         charge_credits(user['id'], cost)
         
-        # Formatear y devolver
+        # 4. FORMATEAR RESPUESTA CON FONDO + EMPLEADOS
         formatted_employees = format_fund_employees_simple(employees)
         
         return jsonify({
-            "company_name": company_name,
+            "fund": {
+                "id": str(fund_info.get('id', '')) if fund_info else '',
+                "company_name": company_name,
+                "found": fund_info is not None,
+                "description": fund_info.get('Company_Description', '') if fund_info else '',
+                "location": fund_info.get('Company_Location', '') if fund_info else '',
+                "linkedin": fund_info.get('Company_Linkedin', '') if fund_info else '',
+                "website": fund_info.get('Company_Website', '') if fund_info else '',
+                "email": fund_info.get('Company_Email', '') if fund_info else '',
+                "investing_stages": fund_info.get('Investing_Stage', '') if fund_info else '',
+                "investment_categories": fund_info.get('Investment_Categories', '') if fund_info else '',
+                "total_employees": len(formatted_employees)
+            },
             "employees": formatted_employees,
-            "total_found": len(formatted_employees),
+            "total_employees": len(formatted_employees),
             "credits_charged": cost,
             "credits_remaining": get_user_credits(user['id']),
-            "success": True
+            "success": True,
+            "search_timestamp": datetime.now().isoformat()
         })
         
     except Exception as e:
         print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
-            "error": "Could not get employees",
+            "error": "Could not get fund + employees",
+            "details": str(e),
             "success": False
         }), 500
 
