@@ -1780,71 +1780,195 @@ class BotManager:
             traceback.print_exc()
             return {'error': f'Bot error: {str(e)}'}
 
-    def _build_smart_prompt(self, user_input, user_context):
-        """Prompt inteligente para respuestas naturales y contextuales"""
-        business_context = user_context.get('business_context', {})
-        user_plan = user_context.get('user_plan', 'free')
-        user_language = user_context.get('user_language', 'en')
-        
-        # Detectar longitud de input para ajustar respuesta
-        input_length = len(user_input.split())
-        is_greeting = any(greeting in user_input.lower() for greeting in ['hi', 'hello', 'hey', 'hola'])
-        
-        language_instructions = {
-            'es': "Responde SIEMPRE en español.",
-            'en': "Respond ALWAYS in English."
-        }.get(user_language, "Respond in the same language as the user.")
-        
-        # Construir sección de roadmap si está disponible
-        roadmap_section = ""
-        if user_context.get('show_roadmap') and user_context.get('roadmap'):
-            roadmap = user_context['roadmap']
-            roadmap_section = f"""
+    # REEMPLAZAR la función _build_smart_prompt() en BotManager
+
+def _build_smart_prompt(self, user_input, user_context):
+    """Prompt de mentor de startups INTELIGENTE con upsell natural"""
+    business_context = user_context.get('business_context', {})
+    user_plan = user_context.get('user_plan', 'free')
+    user_language = user_context.get('user_language', 'en')
+    recent_context = user_context.get('recent_conversation_context', [])
     
-    CURRENT ROADMAP FOR USER:
-    - Stage: {roadmap.get('current', '')}
-    - Urgent: {roadmap.get('urgent_action', '')}
-    - CTA to include naturally: {roadmap.get('cta', '')}
-    """
-        
-        prompt = f"""
-        You are an expert startup mentor who has helped 200+ startups raise capital.
-        
-        {language_instructions}
-        
-        USER CONTEXT:
-        - User plan: {user_plan} (this is their subscription level, NOT their target users)
-        - Business: {business_context.get('startup_name', 'Not defined yet')}
-        - Stage: {business_context.get('stage', 'Idea')}
-        - Industry: {business_context.get('industry', 'Not specified')}
-        {roadmap_section}
-        
-        USER MESSAGE: {user_input}
-        
-        RESPONSE RULES:
-        1. Match response length to input:
-           - Greeting (hi/hello): 1-2 sentences friendly response
-           - Short question: 2-3 paragraphs max
-           - Complex question: Detailed but structured response
-        
-        2. Be a friend AND mentor:
-           - Casual and approachable
-           - But professional when needed
-           - Use examples only when relevant
-        
-        3. Guide towards action:
-           - If they have just an idea, suggest next steps
-           - Offer to create documents naturally: "Need a pitch deck for that?"
-           - Don't overwhelm with all options at once
-           - If roadmap CTA is provided, work it into your response naturally
-        
-        4. NEVER mention their subscription plan unless they ask
-        5. Keep first response under 150 words if input is under 10 words
-        
-        Respond naturally:
-        """
-        
-        return prompt
+    # Detectar tipo de startup y etapa
+    startup_name = business_context.get('startup_name', '')
+    industry = business_context.get('industry', '')
+    stage = business_context.get('stage', 'idea')
+    problem_solving = business_context.get('problem_solving', '')
+    
+    # ¿Es usuario nuevo o experimentado?
+    total_interactions = user_context.get('total_interactions', 0)
+    is_new_user = total_interactions < 3
+    
+    # Detectar longitud de input para personalizar respuesta
+    input_length = len(user_input.split())
+    is_greeting = any(greeting in user_input.lower() for greeting in 
+                     ['hi', 'hello', 'hey', 'hola', 'qué tal', 'cómo estás'])
+    
+    # CONTEXTO ESPECÍFICO POR ETAPA DE STARTUP
+    stage_context = {
+        'idea': {
+            'es': {
+                'situation': 'Tienes una idea de startup',
+                'urgent_action': 'validar el problema y encontrar early adopters',
+                'next_milestone': 'conseguir 10 entrevistas con clientes potenciales',
+                'platform_help': 'buscar inversores angel que inviertan en ideas (requiere Growth)'
+            },
+            'en': {
+                'situation': 'You have a startup idea',
+                'urgent_action': 'validate the problem and find early adopters',
+                'next_milestone': 'get 10 interviews with potential customers',
+                'platform_help': 'find angel investors who invest in ideas (requires Growth)'
+            }
+        },
+        'mvp': {
+            'es': {
+                'situation': 'Tu MVP está listo',
+                'urgent_action': 'conseguir tracción y medir retención',
+                'next_milestone': 'llegar a 100 usuarios activos',
+                'platform_help': 'encontrar VCs que inviertan en MVPs pre-revenue'
+            },
+            'en': {
+                'situation': 'Your MVP is ready',
+                'urgent_action': 'get traction and measure retention',
+                'next_milestone': 'reach 100 active users',
+                'platform_help': 'find VCs that invest in pre-revenue MVPs'
+            }
+        },
+        'seed': {
+            'es': {
+                'situation': 'Estás en ronda seed',
+                'urgent_action': 'escalar hacia Series A',
+                'next_milestone': '€1M ARR y equipo de 10 personas',
+                'platform_help': 'buscar VCs de Series A y ejecutivos clave'
+            },
+            'en': {
+                'situation': 'You are in seed round',
+                'urgent_action': 'scale towards Series A',
+                'next_milestone': '$1M ARR and team of 10 people',
+                'platform_help': 'find Series A VCs and key executives'
+            }
+        }
+    }
+    
+    current_stage = stage_context.get(stage, stage_context['idea'])
+    stage_info = current_stage.get(user_language, current_stage['en'])
+    
+    # INSTRUCCIONES BASE POR IDIOMA
+    base_instructions = {
+        'es': "Responde SIEMPRE en español.",
+        'en': "Respond ALWAYS in English."
+    }
+    
+    language_instruction = base_instructions.get(user_language, "Respond in the same language as the user.")
+    
+    # UPSELL INTELIGENTE POR PLAN
+    upsell_context = ""
+    if user_plan == 'free':
+        upsell_opportunities = {
+            'es': f"""
+LIMITACIONES DEL USUARIO (Plan Free):
+- Solo puede chatear conmigo, NO puede buscar inversores específicos
+- NO puede buscar empleados de fondos  
+- NO puede generar documentos extensos profesionales
+
+OPORTUNIDADES DE UPSELL (menciona NATURALMENTE cuando sea relevante):
+🚀 "¿Quieres que busque inversores específicos para {industry}? Necesitas Growth Plan"
+💼 "¿Te ayudo a encontrar el CTO perfecto? Con Growth puedo buscar en fondos top"
+📊 "¿Genero un pitch deck profesional?"
+            """,
+            'en': f"""
+USER LIMITATIONS (Free Plan):
+- Can only chat with me, CANNOT search specific investors
+- CANNOT search fund employees
+- CANNOT generate extensive professional documents
+
+UPSELL OPPORTUNITIES (mention NATURALLY when relevant):
+🚀 "Want me to find specific investors for {industry}? You need Growth Plan"
+💼 "Should I help you find the perfect CTO? With Growth I can search top funds"
+📊 "Should I generate a professional pitch deck?"
+            """
+        }
+        upsell_context = upsell_opportunities.get(user_language, upsell_opportunities['en'])
+    
+    # PROMPT PRINCIPAL
+    prompt = f"""
+You are Alex Chen, a top startup mentor who has:
+- Helped 200+ startups raise $500M+ total
+- Worked at Y Combinator, Techstars, and Google Ventures  
+- Built and sold 2 companies (one acquired by Google)
+- Expert in every industry from AI to biotech to fintech
+
+{language_instruction}
+
+CURRENT USER CONTEXT:
+- Startup: {startup_name or 'Sin nombre definido'}
+- Industry: {industry or 'No especificada'}
+- Stage: {stage_info['situation']}
+- Problem solving: {problem_solving or 'Por definir'}
+- Plan: {user_plan} ({'Usuario experimentado' if not is_new_user else 'Usuario nuevo'})
+
+URGENT ACTION NEEDED: {stage_info['urgent_action']}
+NEXT MILESTONE: {stage_info['next_milestone']}
+PLATFORM CAN HELP: {stage_info['platform_help']}
+
+{upsell_context}
+
+USER MESSAGE: "{user_input}"
+
+RESPONSE RULES:
+
+1. **BE A REAL MENTOR** (not just a chatbot):
+   - Ask follow-up questions that matter
+   - Challenge assumptions professionally
+   - Give specific, actionable advice
+   - Share relevant examples: "I had a client in fintech who..."
+
+2. **MATCH RESPONSE LENGTH TO INPUT**:
+   - Greeting (hi/hello): 1-2 sentences, warm welcome
+   - Short question (<10 words): 2-3 paragraphs max
+   - Complex question: Detailed structured response with action steps
+
+3. **BE CONTEXTUALLY INTELLIGENT**:
+   - If they just said they're in {stage}, don't ask what stage they're in
+   - Reference their {industry} specifically when giving advice
+   - Build on previous conversation: {len(recent_context)} recent interactions
+
+4. **NATURAL UPSELL** (when genuinely helpful):
+   - If they need investors: "Want me to find specific {industry} investors? I can search our database"
+   - If they need team: "Should I find CTOs from top VCs for you?"  
+   - If they need documents: "I can generate a professional pitch deck for this"
+   - If they mention competitors: "I can search employees from [competitor] to recruit"
+
+5. **STARTUP ACCELERATION**:
+   - Always end with a specific next action
+   - Reference their urgent priority: {stage_info['urgent_action']}
+   - Push towards their milestone: {stage_info['next_milestone']}
+
+6. **PERSONALITY**:
+   - Direct but supportive
+   - Occasionally use startup slang naturally
+   - Show expertise through specific insights
+   - Be optimistic but realistic about challenges
+
+EXAMPLES OF GREAT RESPONSES:
+
+User: "How do I price my SaaS?"
+You: "Pricing is make-or-break for SaaS. For early stage {industry}, I typically see 3 strategies work:
+
+1. **Value-based**: Price on ROI you deliver (my fintech client charges 10% of money saved)
+2. **Competitor +20%**: If you're genuinely better, charge premium  
+3. **Land & expand**: Start low, upsell features
+
+What's your current CAC and target LTV? That'll determine your pricing ceiling.
+
+**Next action**: Test 3 price points with 10 prospects each. I can help you find those prospects if you want - I have access to databases that could identify perfect early customers for {industry}."
+
+CRITICAL: Never mention subscription plans unless user asks about limitations. Make upsell feel like natural mentorship.
+
+Respond now as Alex Chen:
+"""
+    
+    return prompt
 
     def get_startup_roadmap(self, user_context):
         """Genera roadmap INTELIGENTE que guía + hace upsell según tipo de usuario"""
@@ -1874,7 +1998,7 @@ class BotManager:
                         '✅ Define the problem (Chat with me)',
                         '✅ Identify 10 early adopters',
                         '❌ Find angel investors (Requires Growth)',
-                        '❌ Generate professional pitch deck (50 credits)'
+                        '❌ Generate professional pitch deck'
                     ],
                     'growth_unlock': '🚀 With Growth Plan: Find 20+ perfect angel investors for ideas',
                     'cta': 'Want me to find angel investors for your idea now?'
@@ -1888,7 +2012,7 @@ class BotManager:
                         '✅ Conseguir primeros 100 usuarios',
                         '✅ Medir retención semanal',
                         '❌ Buscar VCs seed stage (Requiere Growth)',
-                        '❌ Plan financiero profesional (70 créditos)'
+                        '❌ Plan financiero profesional'
                     ],
                     'growth_unlock': '🎯 Con Growth: 20+ VCs que invierten en MVPs sin revenue',
                     'cta': 'Busco VCs que inviertan en MVPs como el tuyo. ¿Empezamos?'
@@ -1900,7 +2024,7 @@ class BotManager:
                         '✅ Get first 100 users',
                         '✅ Measure weekly retention',
                         '❌ Find seed stage VCs (Requires Growth)',
-                        '❌ Professional financial model (70 credits)'
+                        '❌ Professional financial model'
                     ],
                     'growth_unlock': '🎯 With Growth: 20+ VCs that invest in pre-revenue MVPs',
                     'cta': 'I can find VCs that invest in MVPs like yours. Start now?'
@@ -3196,37 +3320,12 @@ Want me to try a broader search?"""
                         investors_with_scores.append(investor_copy)
                     
                     # 8. MENSAJES DE ÉXITO MULTIIDIOMA
-                    success_messages = {
-                        'es': f"""🎯 **¡Búsqueda completada!**
-
-✅ Encontré **{len(investors_found)} inversores** que coinciden con tu búsqueda.
-💳 **{credits_cost} créditos** utilizados.
-
-📋 **Resultados principales:**
-{investors_table}
-
-💡 **Próximos pasos:**
-- Revisa los perfiles completos en tu proyecto
-- Contacta a los inversores que te interesen
-- Guarda más búsquedas para comparar""",
-                        'en': f"""🎯 **Search completed!**
-
-✅ Found **{len(investors_found)} investors** matching your search.
-💳 **{credits_cost} credits** used.
-
-📋 **Top results:**
-{investors_table}
-
-💡 **Next steps:**
-- Review full profiles in your project
-- Contact investors that interest you
-- Save more searches to compare"""
-                    }
+                    success_messages = None
                     
                     return jsonify({
                         'success': True,
                         'bot': 'interactive_mentor',
-                        'response': success_messages.get(detected_language, success_messages['en']),
+                        'response': None,
                         'credits_charged': credits_cost,
                         'credits_remaining': credits_after,
                         'session_id': session_id,
@@ -3681,7 +3780,231 @@ def search_investors(user):
             'error': 'Error en el servicio de búsqueda',
             'details': str(e)
         }), 500
-                                 
+
+@app.route('/projects/<project_id>/like-investor', methods=['POST'])
+@require_auth
+def like_individual_investor(user, project_id):
+    """
+    Guarda UN inversor específico cuando el usuario hace "like"
+    Frontend envía: { "investor_id": "123", "investor_data": {...} }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'investor_id' not in data:
+            return jsonify({'error': 'investor_id es requerido'}), 400
+        
+        investor_id = data['investor_id']
+        investor_data = data.get('investor_data', {})
+        
+        # Verificar que el proyecto pertenece al usuario
+        with engine.connect() as conn:
+            project_check = conn.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id AND user_id = :user_id"),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not project_check:
+                return jsonify({'error': 'Proyecto no encontrado'}), 404
+            
+            # Verificar si ya está guardado
+            existing = conn.execute(
+                text("""
+                    SELECT 1 FROM project_saved_investors 
+                    WHERE project_id = :project_id AND investor_id = :investor_id
+                """),
+                {"project_id": project_id, "investor_id": investor_id}
+            ).fetchone()
+            
+            if existing:
+                return jsonify({
+                    'success': True,
+                    'message': 'Inversor ya guardado previamente',
+                    'already_saved': True
+                })
+            
+            # Guardar el inversor
+            conn.execute(
+                text("""
+                    INSERT INTO project_saved_investors (project_id, investor_id, added_at) 
+                    VALUES (:project_id, :investor_id, NOW())
+                """),
+                {"project_id": project_id, "investor_id": investor_id}
+            )
+            conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Inversor guardado exitosamente',
+            'project_id': project_id,
+            'investor_id': investor_id,
+            'already_saved': False
+        })
+        
+    except Exception as e:
+        print(f"❌ Error saving individual investor: {e}")
+        return jsonify({'error': 'No se pudo guardar el inversor'}), 500
+
+
+@app.route('/projects/<project_id>/unlike-investor', methods=['DELETE'])
+@require_auth
+def unlike_individual_investor(user, project_id):
+    """
+    Remueve UN inversor específico cuando el usuario hace "unlike"
+    Frontend envía: { "investor_id": "123" }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'investor_id' not in data:
+            return jsonify({'error': 'investor_id es requerido'}), 400
+        
+        investor_id = data['investor_id']
+        
+        # Verificar que el proyecto pertenece al usuario
+        with engine.connect() as conn:
+            project_check = conn.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id AND user_id = :user_id"),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not project_check:
+                return jsonify({'error': 'Proyecto no encontrado'}), 404
+            
+            # Remover el inversor
+            result = conn.execute(
+                text("""
+                    DELETE FROM project_saved_investors 
+                    WHERE project_id = :project_id AND investor_id = :investor_id
+                """),
+                {"project_id": project_id, "investor_id": investor_id}
+            )
+            conn.commit()
+            
+            was_deleted = result.rowcount > 0
+        
+        return jsonify({
+            'success': True,
+            'message': 'Inversor removido exitosamente' if was_deleted else 'Inversor no estaba guardado',
+            'was_deleted': was_deleted,
+            'project_id': project_id,
+            'investor_id': investor_id
+        })
+        
+    except Exception as e:
+        print(f"❌ Error removing individual investor: {e}")
+        return jsonify({'error': 'No se pudo remover el inversor'}), 500
+
+
+@app.route('/projects/<project_id>/check-saved-investors', methods=['POST'])
+@require_auth
+def check_which_investors_are_saved(user, project_id):
+    """
+    Verifica cuáles inversores de una lista ya están guardados
+    Frontend envía: { "investor_ids": ["123", "456", "789"] }
+    Devuelve: { "saved_investors": ["123", "789"] }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'investor_ids' not in data:
+            return jsonify({'error': 'investor_ids es requerido'}), 400
+        
+        investor_ids = data['investor_ids']
+        
+        if not isinstance(investor_ids, list):
+            return jsonify({'error': 'investor_ids debe ser una lista'}), 400
+        
+        # Verificar que el proyecto pertenece al usuario
+        with engine.connect() as conn:
+            project_check = conn.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id AND user_id = :user_id"),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not project_check:
+                return jsonify({'error': 'Proyecto no encontrado'}), 404
+            
+            # Buscar cuáles ya están guardados
+            placeholders = ','.join([f':id_{i}' for i in range(len(investor_ids))])
+            params = {f'id_{i}': investor_id for i, investor_id in enumerate(investor_ids)}
+            params['project_id'] = project_id
+            
+            saved_result = conn.execute(
+                text(f"""
+                    SELECT investor_id FROM project_saved_investors 
+                    WHERE project_id = :project_id AND investor_id IN ({placeholders})
+                """),
+                params
+            ).fetchall()
+            
+            saved_investor_ids = [row[0] for row in saved_result]
+        
+        return jsonify({
+            'success': True,
+            'project_id': project_id,
+            'total_checked': len(investor_ids),
+            'total_saved': len(saved_investor_ids),
+            'saved_investors': saved_investor_ids,
+            'unsaved_investors': [id for id in investor_ids if id not in saved_investor_ids]
+        })
+        
+    except Exception as e:
+        print(f"❌ Error checking saved investors: {e}")
+        return jsonify({'error': 'No se pudo verificar inversores guardados'}), 500
+
+
+@app.route('/projects/<project_id>/like-multiple-investors', methods=['POST'])
+@require_auth
+def like_multiple_selected_investors(user, project_id):
+    """
+    Guarda MÚLTIPLES inversores seleccionados (no todos)
+    Frontend envía: { 
+        "selected_investors": [
+            {"investor_id": "123", "investor_data": {...}},
+            {"investor_id": "456", "investor_data": {...}}
+        ]
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'selected_investors' not in data:
+            return jsonify({'error': 'selected_investors es requerido'}), 400
+        
+        selected_investors = data['selected_investors']
+        
+        if not isinstance(selected_investors, list):
+            return jsonify({'error': 'selected_investors debe ser una lista'}), 400
+        
+        if len(selected_investors) == 0:
+            return jsonify({'error': 'Debe seleccionar al menos un inversor'}), 400
+        
+        # Verificar que el proyecto pertenece al usuario
+        with engine.connect() as conn:
+            project_check = conn.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id AND user_id = :user_id"),
+                {"project_id": project_id, "user_id": user['id']}
+            ).fetchone()
+            
+            if not project_check:
+                return jsonify({'error': 'Proyecto no encontrado'}), 404
+        
+        # Guardar inversores seleccionados (usa la función existente)
+        saved_count = save_investors_to_project_simple(user['id'], project_id, selected_investors)
+        
+        return jsonify({
+            'success': True,
+            'message': f'{saved_count} inversores seleccionados guardados exitosamente',
+            'saved_count': saved_count,
+            'total_selected': len(selected_investors),
+            'project_id': project_id
+        })
+        
+    except Exception as e:
+        print(f"❌ Error saving selected investors: {e}")
+        return jsonify({'error': 'No se pudieron guardar los inversores seleccionados'}), 500
+                   
 # ==============================================================================
 #           ADMIN ENDPOINTS
 # ==============================================================================
