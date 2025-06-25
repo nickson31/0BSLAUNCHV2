@@ -5262,6 +5262,104 @@ def require_plan(required_plan):
         return decorated_function
     return decorator
 
+@app.route('/investors', methods=['GET'])
+@require_auth
+def get_all_investors(user):
+    """
+    Obtiene lista de todos los inversores disponibles para la página Investors
+    Con paginación y filtros opcionales
+    """
+    try:
+        # Parámetros de query
+        page = int(request.args.get('page', 1))
+        limit = min(int(request.args.get('limit', 50)), 100)  # máximo 100
+        offset = (page - 1) * limit
+        
+        # Filtros opcionales
+        location_filter = request.args.get('location')
+        stage_filter = request.args.get('stage')
+        category_filter = request.args.get('category')
+        
+        # Query base
+        base_query = """
+            SELECT 
+                id,
+                "Company_Name" as company_name,
+                "Company_Description" as description,
+                "Company_Location" as location,
+                "Investing_Stage" as investing_stages,
+                "Investment_Categories" as investment_categories,
+                "Company_Linkedin" as linkedin_url,
+                "Company_Website" as website,
+                "Company_Email" as email
+            FROM investors
+            WHERE "Company_Name" IS NOT NULL
+        """
+        
+        params = {}
+        
+        # Agregar filtros si se proporcionan
+        if location_filter:
+            base_query += " AND LOWER(\"Company_Location\") LIKE LOWER(:location)"
+            params['location'] = f'%{location_filter}%'
+            
+        if stage_filter:
+            base_query += " AND LOWER(\"Investing_Stage\") LIKE LOWER(:stage)"
+            params['stage'] = f'%{stage_filter}%'
+            
+        if category_filter:
+            base_query += " AND LOWER(\"Investment_Categories\") LIKE LOWER(:category)"
+            params['category'] = f'%{category_filter}%'
+        
+        # Contar total
+        count_query = f"SELECT COUNT(*) FROM ({base_query}) as counted"
+        
+        with engine.connect() as conn:
+            total_count = conn.execute(text(count_query), params).scalar()
+            
+            # Obtener resultados paginados
+            paginated_query = f"{base_query} ORDER BY \"Company_Name\" LIMIT :limit OFFSET :offset"
+            params.update({'limit': limit, 'offset': offset})
+            
+            result = conn.execute(text(paginated_query), params).fetchall()
+        
+        # Formatear resultados
+        investors = []
+        for row in result:
+            investors.append({
+                'id': str(row[0]),
+                'company_name': row[1] or '',
+                'description': (row[2] or '')[:300] + '...' if len(row[2] or '') > 300 else (row[2] or ''),
+                'location': row[3] or '',
+                'investing_stages': row[4] or '',
+                'investment_categories': row[5] or '',
+                'linkedin_url': row[6] or '',
+                'website': row[7] or '',
+                'email': row[8] or ''
+            })
+        
+        return jsonify({
+            'success': True,
+            'investors': investors,
+            'pagination': {
+                'page': page,
+                'limit': limit,
+                'total_count': total_count,
+                'total_pages': (total_count + limit - 1) // limit,
+                'has_next': page * limit < total_count,
+                'has_prev': page > 1
+            },
+            'filters_applied': {
+                'location': location_filter,
+                'stage': stage_filter,
+                'category': category_filter
+            }
+        })
+        
+    except Exception as e:
+        print(f"❌ Error getting all investors: {e}")
+        return jsonify({'error': 'Could not get investors'}), 500
+        
 @app.route('/investors/<investor_id>/employees', methods=['GET'])
 @require_auth
 @require_plan('growth')
