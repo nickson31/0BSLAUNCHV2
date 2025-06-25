@@ -3237,8 +3237,20 @@ Want me to try a broader search?"""
                         investor_copy['match_score'] = random.randint(72, 99)
                         investors_with_scores.append(investor_copy)
                     
-                    # 8. MENSAJES DE ÉXITO MULTIIDIOMA
-                    success_messages = None
+                    # 8. AGREGAR isLiked a cada inversor
+                    with engine.connect() as conn:
+                        saved_result = conn.execute(
+                            text("""
+                                SELECT investor_id FROM project_saved_investors 
+                                WHERE project_id = :project_id
+                            """),
+                            {"project_id": project_id}
+                        ).fetchall()
+                        saved_investor_ids = {str(row[0]) for row in saved_result}
+                    
+                    # 9. AGREGAR isLiked a inversores
+                    for investor in investors_with_scores:
+                        investor['isLiked'] = investor.get('investor_id') in saved_investor_ids
                     
                     return jsonify({
                         'success': True,
@@ -3252,9 +3264,9 @@ Want me to try a broader search?"""
                         'investor_search_executed': True,
                         'investors_found': len(investors_found),
                         'loading_type': 'investors',
-                        'investors_saved': 0,  # No auto-save, frontend handles with Like button
+                        'investors_saved': 0,
                         'search_query': user_message,
-                        'investors_full_list': investors_with_scores,  # Changed from investors_data
+                        'investors_full_list': investors_with_scores,  # YA TIENE match_score e isLiked
                         'investors_table': investors_table
                     })
                     
@@ -3628,10 +3640,12 @@ def upgrade_subscription(user):
 def search_investors(user):
     """
     Endpoint de búsqueda de inversores - SIEMPRE 20 RESULTADOS MÁXIMO
+    CON match_score e isLiked
     """
     try:
         data = request.get_json()
         query = data.get('query', '').strip()
+        project_id = data.get('project_id')  # NUEVO: project_id del frontend
         
         # Validar query
         if not query or len(query) < 3:
@@ -3639,7 +3653,7 @@ def search_investors(user):
                 'error': 'Query demasiado corto (mínimo 3 caracteres)'
             }), 400
         
-        print(f"🔍 Búsqueda de {user['email']}: '{query}'")
+        print(f"🔍 Búsqueda de {user['email']}: '{query}' para proyecto: {project_id}")
         
         # CRÉDITOS PARA EXACTAMENTE 20 RESULTADOS
         creditos_necesarios = 20 * CREDIT_COSTS['investor_search_result']
@@ -3683,10 +3697,44 @@ def search_investors(user):
                 'error': 'No se pudieron cobrar los créditos'
             }), 500
         
+        # NUEVO: Si hay project_id, obtener inversores guardados
+        saved_investor_ids = set()
+        if project_id:
+            try:
+                with engine.connect() as conn:
+                    saved_result = conn.execute(
+                        text("""
+                            SELECT investor_id FROM project_saved_investors 
+                            WHERE project_id = :project_id
+                        """),
+                        {"project_id": project_id}
+                    ).fetchall()
+                    saved_investor_ids = {str(row[0]) for row in saved_result}
+                print(f"📌 Found {len(saved_investor_ids)} saved investors for project {project_id}")
+            except Exception as e:
+                print(f"⚠️ Error getting saved investors: {e}")
+        
+        # AGREGAR isLiked y asegurar match_score en cada resultado
+        import random
+        for investor in resultados.get('results', []):
+            investor_id = str(investor.get('investor_id', investor.get('id', '')))
+            
+            # Asegurar que match_score existe
+            if 'match_score' not in investor:
+                investor['match_score'] = random.randint(72, 99)
+            
+            # Agregar isLiked
+            investor['isLiked'] = investor_id in saved_investor_ids
+            
+            # Asegurar que investor_id existe
+            if 'investor_id' not in investor:
+                investor['investor_id'] = investor_id
+        
         # Añadir información de créditos y timing
         resultados['credits_charged'] = creditos_a_cobrar
         resultados['credits_remaining'] = get_user_credits(user['id'])
         resultados['processing_time_ms'] = tiempo_procesamiento
+        resultados['project_id'] = project_id  # NUEVO: devolver project_id
         
         print(f"✅ Búsqueda completada: {resultados_encontrados} resultados, {creditos_a_cobrar} créditos, {tiempo_procesamiento}ms")
         
@@ -4136,7 +4184,8 @@ def handle_projects(user):
             return jsonify({
                 'success': True,
                 'projects': projects,
-                'count': len(projects)
+                'count': len(projects),
+                'default_project_id': projects[0]['id'] if projects else None  # NUEVO
             })
         
         elif request.method == 'POST':
@@ -5265,100 +5314,6 @@ def require_plan(required_plan):
 @app.route('/investors', methods=['GET'])
 @require_auth
 def get_all_investors(user):
-    """
-    Obtiene lista de todos los inversores disponibles para la página Investors
-    Con paginación y filtros opcionales
-    """
-    try:
-        # Parámetros de query
-        page = int(request.args.get('page', 1))
-        limit = min(int(request.args.get('limit', 50)), 100)  # máximo 100
-        offset = (page - 1) * limit
-        
-        # Filtros opcionales
-        location_filter = request.args.get('location')
-        stage_filter = request.args.get('stage')
-        category_filter = request.args.get('category')
-        
-        # Query base
-        base_query = """
-            SELECT 
-                id,
-                "Company_Name" as company_name,
-                "Company_Description" as description,
-                "Company_Location" as location,
-                "Investing_Stage" as investing_stages,
-                "Investment_Categories" as investment_categories,
-                "Company_Linkedin" as linkedin_url,
-                "Company_Website" as website,
-                "Company_Email" as email
-            FROM investors
-            WHERE "Company_Name" IS NOT NULL
-        """
-        
-        params = {}
-        
-        # Agregar filtros si se proporcionan
-        if location_filter:
-            base_query += " AND LOWER(\"Company_Location\") LIKE LOWER(:location)"
-            params['location'] = f'%{location_filter}%'
-            
-        if stage_filter:
-            base_query += " AND LOWER(\"Investing_Stage\") LIKE LOWER(:stage)"
-            params['stage'] = f'%{stage_filter}%'
-            
-        if category_filter:
-            base_query += " AND LOWER(\"Investment_Categories\") LIKE LOWER(:category)"
-            params['category'] = f'%{category_filter}%'
-        
-        # Contar total
-        count_query = f"SELECT COUNT(*) FROM ({base_query}) as counted"
-        
-        with engine.connect() as conn:
-            total_count = conn.execute(text(count_query), params).scalar()
-            
-            # Obtener resultados paginados
-            paginated_query = f"{base_query} ORDER BY \"Company_Name\" LIMIT :limit OFFSET :offset"
-            params.update({'limit': limit, 'offset': offset})
-            
-            result = conn.execute(text(paginated_query), params).fetchall()
-        
-        # Formatear resultados
-        investors = []
-        for row in result:
-            investors.append({
-                'id': str(row[0]),
-                'company_name': row[1] or '',
-                'description': (row[2] or '')[:300] + '...' if len(row[2] or '') > 300 else (row[2] or ''),
-                'location': row[3] or '',
-                'investing_stages': row[4] or '',
-                'investment_categories': row[5] or '',
-                'linkedin_url': row[6] or '',
-                'website': row[7] or '',
-                'email': row[8] or ''
-            })
-        
-        return jsonify({
-            'success': True,
-            'investors': investors,
-            'pagination': {
-                'page': page,
-                'limit': limit,
-                'total_count': total_count,
-                'total_pages': (total_count + limit - 1) // limit,
-                'has_next': page * limit < total_count,
-                'has_prev': page > 1
-            },
-            'filters_applied': {
-                'location': location_filter,
-                'stage': stage_filter,
-                'category': category_filter
-            }
-        })
-        
-    except Exception as e:
-        print(f"❌ Error getting all investors: {e}")
-        return jsonify({'error': 'Could not get investors'}), 500
         
 @app.route('/investors/<investor_id>/employees', methods=['GET'])
 @require_auth
