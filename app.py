@@ -3187,7 +3187,35 @@ Want me to try a broader search?"""
                         detected_language
                     )
                     
-            
+                    # 7. MENSAJES DE ÉXITO MULTIIDIOMA
+                    success_messages = {
+                        'es': f"""🎯 **¡Búsqueda completada!**
+
+✅ Encontré **{len(investors_found)} inversores** que coinciden con tu búsqueda.
+💾 **{saved_count} guardados** en tu proyecto.
+💳 **{credits_cost} créditos** utilizados.
+
+📋 **Resultados principales:**
+{investors_table}
+
+💡 **Próximos pasos:**
+- Revisa los perfiles completos en tu proyecto
+- Contacta a los inversores que te interesen
+- Guarda más búsquedas para comparar""",
+                        'en': f"""🎯 **Search completed!**
+
+✅ Found **{len(investors_found)} investors** matching your search.
+💾 **{saved_count} saved** to your project.
+💳 **{credits_cost} credits** used.
+
+📋 **Top results:**
+{investors_table}
+
+💡 **Next steps:**
+- Review full profiles in your project
+- Contact investors that interest you
+- Save more searches to compare"""
+                    }
                     
                     return jsonify({
                         'success': True,
