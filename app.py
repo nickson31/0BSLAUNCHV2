@@ -2980,7 +2980,7 @@ def chat_with_bot(user):
     else:
         wants_document = False  # Si busca inversores, NUNCA puede ser documento
 
-    print(f"📊 Detección final - Inversores: {wants_investor_search}, Documento: {wants_document}")ocument intent: {doc_error}")
+    print(f"📊 Detección final - Inversores: {wants_investor_search}, Documento: {wants_document}, Document intent: {doc_error}")
             wants_document = False
 
         # ============================================================================
