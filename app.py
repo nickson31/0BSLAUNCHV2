@@ -3077,6 +3077,7 @@ Just tell me which one and I'll generate it professionally."""
             
             # Añadir IDs de sesión y proyecto
             doc_response['session_id'] = session_id
+            doc_response['loading_type'] = 'document'
             doc_response['project_id'] = project_id
             doc_response['detected_language'] = detected_language
             
@@ -3250,6 +3251,7 @@ Want me to try a broader search?"""
                         'detected_language': detected_language,
                         'investor_search_executed': True,
                         'investors_found': len(investors_found),
+                        'loading_type': 'investors',
                         'investors_saved': 0,  # No auto-save, frontend handles with Like button
                         'search_query': user_message,
                         'investors_full_list': investors_with_scores,  # Changed from investors_data
@@ -3365,6 +3367,7 @@ There was a technical problem executing the search.
             'session_id': session_id,
             'project_id': project_id,
             'detected_language': detected_language,
+            'loading_type': 'text'
             'investor_search_detected': False,  # Siempre False en este flujo
             'processing_success': response.get('processing_success', True)
         }
@@ -4748,6 +4751,7 @@ def generate_document_with_bot(user):
             'credits_remaining': credits_after,
             'download_url': f'/documents/{document_id}/download',
             'view_url': f'/documents/{document_id}/view',
+            'loading_type': 'document'
             'detected_language': detected_language
         })
         
