@@ -4751,7 +4751,7 @@ def generate_document_with_bot(user):
             'credits_remaining': credits_after,
             'download_url': f'/documents/{document_id}/download',
             'view_url': f'/documents/{document_id}/view',
-            'loading_type': 'document'
+            'loading_type': 'document',
             'detected_language': detected_language
         })
         
