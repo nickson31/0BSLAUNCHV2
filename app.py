@@ -3187,12 +3187,19 @@ Want me to try a broader search?"""
                         detected_language
                     )
                     
-                    # 7. MENSAJES DE ÉXITO MULTIIDIOMA
+                    # 7. AGREGAR SCORES FALSOS A LOS INVERSORES (72-99%)
+                    import random
+                    investors_with_scores = []
+                    for investor in investors_found:
+                        investor_copy = investor.copy()
+                        investor_copy['match_score'] = random.randint(72, 99)
+                        investors_with_scores.append(investor_copy)
+                    
+                    # 8. MENSAJES DE ÉXITO MULTIIDIOMA
                     success_messages = {
                         'es': f"""🎯 **¡Búsqueda completada!**
 
 ✅ Encontré **{len(investors_found)} inversores** que coinciden con tu búsqueda.
-💾 **{saved_count} guardados** en tu proyecto.
 💳 **{credits_cost} créditos** utilizados.
 
 📋 **Resultados principales:**
@@ -3205,7 +3212,6 @@ Want me to try a broader search?"""
                         'en': f"""🎯 **Search completed!**
 
 ✅ Found **{len(investors_found)} investors** matching your search.
-💾 **{saved_count} saved** to your project.
 💳 **{credits_cost} credits** used.
 
 📋 **Top results:**
@@ -3228,9 +3234,9 @@ Want me to try a broader search?"""
                         'detected_language': detected_language,
                         'investor_search_executed': True,
                         'investors_found': len(investors_found),
-                        'investors_saved': saved_count,
+                        'investors_saved': 0,  # No auto-save, frontend handles with Like button
                         'search_query': user_message,
-                        'investors_data': investors_found, 
+                        'investors_full_list': investors_with_scores,  # Changed from investors_data
                         'investors_table': investors_table
                     })
                     
