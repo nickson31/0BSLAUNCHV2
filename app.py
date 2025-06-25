@@ -3367,7 +3367,7 @@ There was a technical problem executing the search.
             'session_id': session_id,
             'project_id': project_id,
             'detected_language': detected_language,
-            'loading_type': 'text'
+            'loading_type': 'text',
             'investor_search_detected': False,  # Siempre False en este flujo
             'processing_success': response.get('processing_success', True)
         }
