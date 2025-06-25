@@ -1363,55 +1363,65 @@ def generate_context_summary(business_context, recent_chats):
         return "Error generando resumen de contexto"
 
 def detect_investor_search_intent(user_message, user_language='en'):
-    """Detecta si el usuario quiere buscar inversores ESPECÍFICOS usando Gemini - VERSIÓN CORREGIDA"""
+    """Detecta si el usuario quiere buscar inversores ESPECÍFICOS - VERSIÓN CORREGIDA Y ESTRICTA"""
     try:
+        # PALABRAS QUE AUTOMÁTICAMENTE DESCARTAN BÚSQUEDA DE INVERSORES
+        document_keywords = ['genera', 'generate', 'crea', 'create', 'hazme', 'make me', 'escribe', 'write', 
+                           'redacta', 'draft', 'pitch deck', 'business plan', 'plan de', 'documento', 'document']
+        advice_keywords = ['cómo', 'how', 'qué estrategia', 'what strategy', 'consejo', 'advice', 
+                         'recomendación', 'recommendation', 'ayuda', 'help me', '¿qué', 'what should']
+        
+        message_lower = user_message.lower()
+        
+        # SI menciona generar documentos o pide consejos, NO es búsqueda de inversores
+        for keyword in document_keywords + advice_keywords:
+            if keyword in message_lower:
+                print(f"🚫 NO es búsqueda de inversores - Palabra clave encontrada: {keyword}")
+                return False
+        
         detection_prompts = {
             'es': f"""
-            Analiza si el usuario quiere BUSCAR INVERSORES ESPECÍFICOS para su startup:
+            Analiza ESTRICTAMENTE si el usuario quiere BUSCAR Y ENCONTRAR inversores específicos:
             "{user_message}"
             
             Responde SOLO 'true' o 'false'.
             
-            ✅ SÍ es búsqueda de inversores (responde 'true'):
+            ✅ SÍ es búsqueda de inversores (responde 'true') SOLO SI:
             - "Buscar inversores para fintech"
             - "Encuentrame VCs de Madrid" 
-            - "Necesito inversores"
+            - "Necesito contactar inversores"
             - "Startup Profile for Investor Matching"
-            - Cualquier descripción que incluya: "funding", "Series A/B/C", "seed", "€", "$", "million", "ARR"
-            - Descripciones detalladas de startups con métricas o industria
-            - "I need investors for my..."
-            - Texto estructurado con información de startup (sector, modelo, etc)
+            - "Find me seed investors"
+            - Claramente pide ENCONTRAR o BUSCAR inversores específicos
             
-            ❌ NO es búsqueda (responde 'false'):
-            - "Genera un pitch deck"
-            - "Crea un documento"
-            - "Escribe un plan"
-            - "Cómo convencer inversores" (consejo, no búsqueda)
-            - Preguntas teóricas sobre inversión
+            ❌ NO es búsqueda (responde 'false') SI:
+            - Menciona "genera", "crea", "hazme", "pitch deck", "plan"
+            - Pide consejos: "cómo", "qué estrategia", "ayuda"
+            - Solo menciona funding/Series B sin pedir búsqueda
+            - Habla de competidores sin pedir inversores
+            - Cualquier pregunta teórica sobre inversión
             """,
             
             'en': f"""
-            Analyze if user wants to SEARCH FOR SPECIFIC INVESTORS for their startup:
+            Analyze STRICTLY if user wants to SEARCH AND FIND specific investors:
             "{user_message}"
             
-            Respond ONLY with 'true' or 'false'.
+            Respond ONLY 'true' or 'false'.
             
-            ✅ YES it's investor search (respond 'true'):
+            ✅ YES it's investor search (respond 'true') ONLY IF:
             - "Search for fintech investors"
             - "Find VCs in London"
-            - "I need investors"
+            - "I need to contact investors"
             - "Startup Profile for Investor Matching"
-            - Any description including: "funding", "Series A/B/C", "seed", "€", "$", "million", "ARR"
-            - Detailed startup descriptions with metrics or industry
-            - "I need investors for my..."
-            - Structured text with startup info (sector, model, etc)
+            - "Find me seed investors"
+            - Clearly asks to FIND or SEARCH specific investors
             
-            ❌ NO it's not search (respond 'false'):
-            - "Generate a pitch deck"
-            - "Create a document"
-            - "Write a plan"
-            - "How to convince investors" (advice, not search)
-            - Theoretical questions about investment
+            ❌ NO it's not search (respond 'false') IF:
+            - Mentions "generate", "create", "make", "pitch deck", "plan"
+            - Asks for advice: "how", "what strategy", "help"
+            - Only mentions funding/Series B without asking for search
+            - Talks about competitors without asking for investors
+            - Any theoretical question about investment
             """
         }
         
@@ -1428,44 +1438,21 @@ def detect_investor_search_intent(user_message, user_language='en'):
         
         result = response.text.strip().lower() == 'true'
         
-        # FALLBACK MEJORADO: Si Gemini falla, buscar patrones específicos
-        if not result:
-            # Patrones que SIEMPRE indican búsqueda de inversores
-            strong_investor_patterns = [
-                'startup profile for investor',
-                'need investors for',
-                'looking for.*funding',
-                'series [a-c]',
-                'seeking.*investment',
-                '\\d+.*million.*arr',
-                'funding.*needed',
-                'investor matching'
-            ]
-            
-            message_lower = user_message.lower()
-            for pattern in strong_investor_patterns:
-                if re.search(pattern, message_lower):
-                    result = True
-                    print(f"🔄 Fallback pattern matched: {pattern}")
-                    break
-        
-        print(f"🤖 Intent detection: '{user_message[:50]}...' → {result}")
+        print(f"🤖 Intent detection ESTRICTA: '{user_message[:50]}...' → {result}")
         return result
         
     except Exception as e:
         print(f"❌ Error detecting investor search intent: {e}")
-        # Fallback más agresivo
-        investor_keywords = ['investor', 'funding', 'series', 'seed', 'vc', 'capital']
+        # FALLBACK MUY CONSERVADOR - solo keywords obvios
+        obvious_search_patterns = ['buscar inversores', 'find investors', 'search for vcs', 'encuentrame fondos']
         message_lower = user_message.lower()
-        return any(keyword in message_lower for keyword in investor_keywords)
+        fallback_result = any(pattern in message_lower for pattern in obvious_search_patterns)
+        print(f"🔄 Fallback conservador: {fallback_result}")
+        return fallback_result
 
 def detect_document_generation_intent(user_message, user_language='en'):
-    """Detecta si el usuario quiere generar un documento profesional - VERSIÓN MEJORADA"""
+    """Detecta si el usuario quiere generar un documento profesional - VERSIÓN MEJORADA Y MÁS ESTRICTA"""
     try:
-        # IMPORTANTE: Si ya menciona inversores, NO es documento
-        if 'investor' in user_message.lower() or 'funding' in user_message.lower():
-            return False
-            
         detection_prompts = {
             'es': f"""
             Analiza si el usuario quiere que GENERES un DOCUMENTO profesional:
@@ -1474,17 +1461,18 @@ def detect_document_generation_intent(user_message, user_language='en'):
             Responde SOLO 'true' o 'false'.
             
             ✅ SÍ quiere documento (responde 'true'):
-            - "Hazme un pitch deck"
-            - "Genera un plan de negocios"
-            - "Crea un plan de marketing"
+            - "Genera un pitch deck"
+            - "Hazme un plan de negocios"
+            - "Crea un plan de marketing" 
             - "Redacta el modelo financiero"
-            - Uso explícito de verbos: "genera", "crea", "hazme", "escribe"
+            - "Escribe un business plan"
+            - Uso explícito de verbos: "genera", "crea", "hazme", "escribe", "redacta"
             
             ❌ NO es documento (responde 'false'):
-            - Cualquier mención de "inversores" o "funding"
-            - "Startup Profile for Investor Matching"
-            - Descripciones de negocio sin pedir documento
-            - Preguntas generales
+            - Cualquier mención de "buscar", "encontrar", "inversores"
+            - Preguntas de consejo: "cómo", "qué estrategia"
+            - Solo menciona documentos sin pedir generación
+            - Preguntas generales sin solicitud de creación
             """,
             
             'en': f"""
@@ -1494,17 +1482,18 @@ def detect_document_generation_intent(user_message, user_language='en'):
             Respond ONLY 'true' or 'false'.
             
             ✅ YES wants document (respond 'true'):
-            - "Make me a pitch deck"
-            - "Generate a business plan"
+            - "Generate a pitch deck"
+            - "Make me a business plan"
             - "Create a marketing plan"
             - "Write the financial model"
-            - Explicit use of verbs: "generate", "create", "make", "write"
+            - "Draft a business plan"
+            - Explicit use of verbs: "generate", "create", "make", "write", "draft"
             
             ❌ NO document (respond 'false'):
-            - Any mention of "investors" or "funding"
-            - "Startup Profile for Investor Matching"
-            - Business descriptions without asking for document
-            - General questions
+            - Any mention of "search", "find", "investors"
+            - Advice questions: "how", "what strategy"
+            - Only mentions documents without asking for generation
+            - General questions without creation request
             """
         }
         
@@ -1516,11 +1505,19 @@ def detect_document_generation_intent(user_message, user_language='en'):
             generation_config={"temperature": 0.1, "max_output_tokens": 10}
         )
         
-        return response.text.strip().lower() == 'true'
+        result = response.text.strip().lower() == 'true'
+        
+        print(f"📄 Document intent detection: '{user_message[:50]}...' → {result}")
+        return result
         
     except Exception as e:
         print(f"❌ Error detecting document intent: {e}")
-        return False
+        # FALLBACK: buscar verbos explícitos de generación
+        generation_verbs = ['genera', 'generate', 'crea', 'create', 'hazme', 'make me', 'escribe', 'write']
+        message_lower = user_message.lower()
+        fallback_result = any(verb in message_lower for verb in generation_verbs)
+        print(f"🔄 Document fallback: {fallback_result}")
+        return fallback_result
 
 def identify_document_type(message, language='en'):
     """Identifica qué tipo de documento quiere el usuario"""
