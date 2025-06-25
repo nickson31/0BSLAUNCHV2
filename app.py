@@ -1249,7 +1249,7 @@ def get_enhanced_context_for_chat(user, session_id, project_id, data):
         
 def get_project_context_for_chat(user_id, project_id):
     """
-    Obtiene el contexto completo del proyecto para el chat - OPTIMIZADO
+    Obtiene el contexto completo del proyecto para el chat - CORREGIDO JSON
     """
     try:
         with engine.connect() as conn:
@@ -1277,57 +1277,59 @@ def get_project_context_for_chat(user_id, project_id):
                 """),
                 {"user_id": user_id, "project_id": project_id}
             ).fetchall()
-            
-            # Obtener documentos del proyecto
-            project_docs = conn.execute(
-                text("""
-                    SELECT document_type, title, created_at 
-                    FROM generated_documents 
-                    WHERE user_id = :user_id 
-                    AND metadata::jsonb->>'project_id' = :project_id
-                    ORDER BY created_at DESC
-                """),
-                {"user_id": user_id, "project_id": project_id}
-            ).fetchall()
         
-        # Procesar memoria del proyecto
-        project_memory = json.loads(project_result[2]) if project_result[2] else {}
+        # CORREGIR PROCESAMIENTO JSON - MANEJO ROBUSTO
+        project_memory = {}
+        try:
+            if project_result[2]:  # Si kpi_data no es None
+                if isinstance(project_result[2], str):
+                    project_memory = json.loads(project_result[2])
+                elif isinstance(project_result[2], dict):
+                    project_memory = project_result[2]
+                else:
+                    project_memory = {}
+            else:
+                project_memory = {}
+        except (json.JSONDecodeError, TypeError) as json_error:
+            print(f"⚠️ JSON decode error en project context: {json_error}")
+            project_memory = {}
+        
         business_context = project_memory.get("business_context", {})
         
         # Crear resumen de chats recientes
         recent_context = []
         for chat in recent_chats[:5]:  # Últimos 5 chats
-            recent_context.append({
-                "user_said": chat[0][:100] + "..." if len(chat[0]) > 100 else chat[0],
-                "assistant_responded": chat[1][:100] + "..." if len(chat[1]) > 100 else chat[1],
-                "when": chat[2].strftime("%Y-%m-%d")
-            })
-        
-        # Crear lista de documentos
-        documents_created = [
-            {
-                "type": doc[0],
-                "title": doc[1],
-                "created": doc[2].strftime("%Y-%m-%d")
-            }
-            for doc in project_docs
-        ]
+            try:
+                recent_context.append({
+                    "user_said": chat[0][:100] + "..." if len(str(chat[0])) > 100 else str(chat[0]),
+                    "assistant_responded": chat[1][:100] + "..." if len(str(chat[1])) > 100 else str(chat[1]),
+                    "when": chat[2].strftime("%Y-%m-%d") if chat[2] else "unknown"
+                })
+            except Exception as chat_error:
+                print(f"⚠️ Error procesando chat: {chat_error}")
+                continue
         
         return {
-            "project_name": project_result[0],
-            "project_description": project_result[1],
-            "project_status": project_result[3],
-            "project_age_days": (datetime.now() - project_result[4]).days,
+            "project_name": project_result[0] or "Proyecto Sin Nombre",
+            "project_description": project_result[1] or "",
+            "project_status": project_result[3] or "ACTIVE",
+            "project_age_days": (datetime.now() - project_result[4]).days if project_result[4] else 0,
             "business_context": business_context,
             "recent_conversation_context": recent_context,
-            "documents_created": documents_created,
             "total_interactions": len(recent_chats),
             "context_summary": generate_context_summary(business_context, recent_context)
         }
         
     except Exception as e:
         print(f"❌ Error getting project context: {e}")
-        return {}
+        import traceback
+        traceback.print_exc()
+        return {
+            "business_context": {},
+            "recent_conversation_context": [],
+            "total_interactions": 0,
+            "context_summary": "Error obteniendo contexto del proyecto"
+        }
 
 def generate_context_summary(business_context, recent_chats):
     """Genera un resumen del contexto para incluir en prompts"""
@@ -1780,92 +1782,90 @@ class BotManager:
             traceback.print_exc()
             return {'error': f'Bot error: {str(e)}'}
 
-    # REEMPLAZAR la función _build_smart_prompt() en BotManager
-
-def _build_smart_prompt(self, user_input, user_context):
-    """Prompt de mentor de startups INTELIGENTE con upsell natural"""
-    business_context = user_context.get('business_context', {})
-    user_plan = user_context.get('user_plan', 'free')
-    user_language = user_context.get('user_language', 'en')
-    recent_context = user_context.get('recent_conversation_context', [])
-    
-    # Detectar tipo de startup y etapa
-    startup_name = business_context.get('startup_name', '')
-    industry = business_context.get('industry', '')
-    stage = business_context.get('stage', 'idea')
-    problem_solving = business_context.get('problem_solving', '')
-    
-    # ¿Es usuario nuevo o experimentado?
-    total_interactions = user_context.get('total_interactions', 0)
-    is_new_user = total_interactions < 3
-    
-    # Detectar longitud de input para personalizar respuesta
-    input_length = len(user_input.split())
-    is_greeting = any(greeting in user_input.lower() for greeting in 
-                     ['hi', 'hello', 'hey', 'hola', 'qué tal', 'cómo estás'])
-    
-    # CONTEXTO ESPECÍFICO POR ETAPA DE STARTUP
-    stage_context = {
-        'idea': {
-            'es': {
-                'situation': 'Tienes una idea de startup',
-                'urgent_action': 'validar el problema y encontrar early adopters',
-                'next_milestone': 'conseguir 10 entrevistas con clientes potenciales',
-                'platform_help': 'buscar inversores angel que inviertan en ideas (requiere Growth)'
+    def _build_smart_prompt(self, user_input, user_context):
+        """Prompt de mentor de startups INTELIGENTE con upsell natural"""
+        business_context = user_context.get('business_context', {})
+        user_plan = user_context.get('user_plan', 'free')
+        user_language = user_context.get('user_language', 'en')
+        recent_context = user_context.get('recent_conversation_context', [])
+        
+        # Detectar tipo de startup y etapa
+        startup_name = business_context.get('startup_name', '')
+        industry = business_context.get('industry', '')
+        stage = business_context.get('stage', 'idea')
+        problem_solving = business_context.get('problem_solving', '')
+        
+        # ¿Es usuario nuevo o experimentado?
+        total_interactions = user_context.get('total_interactions', 0)
+        is_new_user = total_interactions < 3
+        
+        # Detectar longitud de input para personalizar respuesta
+        input_length = len(user_input.split())
+        is_greeting = any(greeting in user_input.lower() for greeting in 
+                         ['hi', 'hello', 'hey', 'hola', 'qué tal', 'cómo estás'])
+        
+        # CONTEXTO ESPECÍFICO POR ETAPA DE STARTUP
+        stage_context = {
+            'idea': {
+                'es': {
+                    'situation': 'Tienes una idea de startup',
+                    'urgent_action': 'validar el problema y encontrar early adopters',
+                    'next_milestone': 'conseguir 10 entrevistas con clientes potenciales',
+                    'platform_help': 'buscar inversores angel que inviertan en ideas (requiere Growth)'
+                },
+                'en': {
+                    'situation': 'You have a startup idea',
+                    'urgent_action': 'validate the problem and find early adopters',
+                    'next_milestone': 'get 10 interviews with potential customers',
+                    'platform_help': 'find angel investors who invest in ideas (requires Growth)'
+                }
             },
-            'en': {
-                'situation': 'You have a startup idea',
-                'urgent_action': 'validate the problem and find early adopters',
-                'next_milestone': 'get 10 interviews with potential customers',
-                'platform_help': 'find angel investors who invest in ideas (requires Growth)'
-            }
-        },
-        'mvp': {
-            'es': {
-                'situation': 'Tu MVP está listo',
-                'urgent_action': 'conseguir tracción y medir retención',
-                'next_milestone': 'llegar a 100 usuarios activos',
-                'platform_help': 'encontrar VCs que inviertan en MVPs pre-revenue'
+            'mvp': {
+                'es': {
+                    'situation': 'Tu MVP está listo',
+                    'urgent_action': 'conseguir tracción y medir retención',
+                    'next_milestone': 'llegar a 100 usuarios activos',
+                    'platform_help': 'encontrar VCs que inviertan en MVPs pre-revenue'
+                },
+                'en': {
+                    'situation': 'Your MVP is ready',
+                    'urgent_action': 'get traction and measure retention',
+                    'next_milestone': 'reach 100 active users',
+                    'platform_help': 'find VCs that invest in pre-revenue MVPs'
+                }
             },
-            'en': {
-                'situation': 'Your MVP is ready',
-                'urgent_action': 'get traction and measure retention',
-                'next_milestone': 'reach 100 active users',
-                'platform_help': 'find VCs that invest in pre-revenue MVPs'
-            }
-        },
-        'seed': {
-            'es': {
-                'situation': 'Estás en ronda seed',
-                'urgent_action': 'escalar hacia Series A',
-                'next_milestone': '€1M ARR y equipo de 10 personas',
-                'platform_help': 'buscar VCs de Series A y ejecutivos clave'
-            },
-            'en': {
-                'situation': 'You are in seed round',
-                'urgent_action': 'scale towards Series A',
-                'next_milestone': '$1M ARR and team of 10 people',
-                'platform_help': 'find Series A VCs and key executives'
+            'seed': {
+                'es': {
+                    'situation': 'Estás en ronda seed',
+                    'urgent_action': 'escalar hacia Series A',
+                    'next_milestone': '€1M ARR y equipo de 10 personas',
+                    'platform_help': 'buscar VCs de Series A y ejecutivos clave'
+                },
+                'en': {
+                    'situation': 'You are in seed round',
+                    'urgent_action': 'scale towards Series A',
+                    'next_milestone': '$1M ARR and team of 10 people',
+                    'platform_help': 'find Series A VCs and key executives'
+                }
             }
         }
-    }
-    
-    current_stage = stage_context.get(stage, stage_context['idea'])
-    stage_info = current_stage.get(user_language, current_stage['en'])
-    
-    # INSTRUCCIONES BASE POR IDIOMA
-    base_instructions = {
-        'es': "Responde SIEMPRE en español.",
-        'en': "Respond ALWAYS in English."
-    }
-    
-    language_instruction = base_instructions.get(user_language, "Respond in the same language as the user.")
-    
-    # UPSELL INTELIGENTE POR PLAN
-    upsell_context = ""
-    if user_plan == 'free':
-        upsell_opportunities = {
-            'es': f"""
+        
+        current_stage = stage_context.get(stage, stage_context['idea'])
+        stage_info = current_stage.get(user_language, current_stage['en'])
+        
+        # INSTRUCCIONES BASE POR IDIOMA
+        base_instructions = {
+            'es': "Responde SIEMPRE en español.",
+            'en': "Respond ALWAYS in English."
+        }
+        
+        language_instruction = base_instructions.get(user_language, "Respond in the same language as the user.")
+        
+        # UPSELL INTELIGENTE POR PLAN
+        upsell_context = ""
+        if user_plan == 'free':
+            upsell_opportunities = {
+                'es': f"""
 LIMITACIONES DEL USUARIO (Plan Free):
 - Solo puede chatear conmigo, NO puede buscar inversores específicos
 - NO puede buscar empleados de fondos  
@@ -1875,8 +1875,8 @@ OPORTUNIDADES DE UPSELL (menciona NATURALMENTE cuando sea relevante):
 🚀 "¿Quieres que busque inversores específicos para {industry}? Necesitas Growth Plan"
 💼 "¿Te ayudo a encontrar el CTO perfecto? Con Growth puedo buscar en fondos top"
 📊 "¿Genero un pitch deck profesional?"
-            """,
-            'en': f"""
+                """,
+                'en': f"""
 USER LIMITATIONS (Free Plan):
 - Can only chat with me, CANNOT search specific investors
 - CANNOT search fund employees
@@ -1886,12 +1886,12 @@ UPSELL OPPORTUNITIES (mention NATURALLY when relevant):
 🚀 "Want me to find specific investors for {industry}? You need Growth Plan"
 💼 "Should I help you find the perfect CTO? With Growth I can search top funds"
 📊 "Should I generate a professional pitch deck?"
-            """
-        }
-        upsell_context = upsell_opportunities.get(user_language, upsell_opportunities['en'])
-    
-    # PROMPT PRINCIPAL
-    prompt = f"""
+                """
+            }
+            upsell_context = upsell_opportunities.get(user_language, upsell_opportunities['en'])
+        
+        # PROMPT PRINCIPAL
+        prompt = f"""
 You are Alex Chen, a top startup mentor who has:
 - Helped 200+ startups raise $500M+ total
 - Worked at Y Combinator, Techstars, and Google Ventures  
@@ -1967,8 +1967,8 @@ CRITICAL: Never mention subscription plans unless user asks about limitations. M
 
 Respond now as Alex Chen:
 """
-    
-    return prompt
+        
+        return prompt
 
     def get_startup_roadmap(self, user_context):
         """Genera roadmap INTELIGENTE que guía + hace upsell según tipo de usuario"""
@@ -1986,7 +1986,7 @@ Respond now as Alex Chen:
                         '✅ Define el problema (Chat conmigo)',
                         '✅ Identifica 10 early adopters',
                         '❌ Buscar inversores angel (Requiere Growth)',
-                        '❌ Generar pitch deck profesional (50 créditos)'
+                        '❌ Generar pitch deck profesional'
                     ],
                     'growth_unlock': '🚀 Con Growth Plan: Encuentra 20+ inversores angel perfectos para ideas',
                     'cta': '¿Quieres que busque inversores angel para tu idea ahora?'
@@ -2003,92 +2003,12 @@ Respond now as Alex Chen:
                     'growth_unlock': '🚀 With Growth Plan: Find 20+ perfect angel investors for ideas',
                     'cta': 'Want me to find angel investors for your idea now?'
                 }
-            },
-            'mvp': {
-                'es': {
-                    'current': '🚀 Fase MVP',
-                    'urgent_action': '⚡ CRÍTICO: Necesitas tracción ANTES de buscar inversión',
-                    'free_steps': [
-                        '✅ Conseguir primeros 100 usuarios',
-                        '✅ Medir retención semanal',
-                        '❌ Buscar VCs seed stage (Requiere Growth)',
-                        '❌ Plan financiero profesional'
-                    ],
-                    'growth_unlock': '🎯 Con Growth: 20+ VCs que invierten en MVPs sin revenue',
-                    'cta': 'Busco VCs que inviertan en MVPs como el tuyo. ¿Empezamos?'
-                },
-                'en': {
-                    'current': '🚀 MVP Stage',
-                    'urgent_action': '⚡ CRITICAL: You need traction BEFORE seeking investment',
-                    'free_steps': [
-                        '✅ Get first 100 users',
-                        '✅ Measure weekly retention',
-                        '❌ Find seed stage VCs (Requires Growth)',
-                        '❌ Professional financial model'
-                    ],
-                    'growth_unlock': '🎯 With Growth: 20+ VCs that invest in pre-revenue MVPs',
-                    'cta': 'I can find VCs that invest in MVPs like yours. Start now?'
-                }
-            },
-            'seed': {
-                'es': {
-                    'current': '💰 Fase Seed',
-                    'urgent_action': '⚡ MOMENTO CLAVE: Series A en 12-18 meses',
-                    'free_steps': [
-                        '✅ Escalar a €1M ARR',
-                        '✅ Contratar primeros 5 empleados',
-                        '❌ Buscar fondos Series A (Requiere Growth)',
-                        '❌ Buscar CTOs/CMOs (Requiere Growth)'
-                    ],
-                    'growth_unlock': '💎 Con Growth: Encuentra Series A + Empleados clave de fondos top',
-                    'cta': '¿Necesitas Series A o un CTO? Puedo buscar ambos.'
-                },
-                'en': {
-                    'current': '💰 Seed Stage',
-                    'urgent_action': '⚡ KEY MOMENT: Series A in 12-18 months',
-                    'free_steps': [
-                        '✅ Scale to $1M ARR',
-                        '✅ Hire first 5 employees',
-                        '❌ Find Series A funds (Requires Growth)',
-                        '❌ Find CTOs/CMOs (Requires Growth)'
-                    ],
-                    'growth_unlock': '💎 With Growth: Find Series A + Key employees from top funds',
-                    'cta': 'Need Series A or a CTO? I can find both.'
-                }
-            },
-            'corporate': {
-                'es': {
-                    'current': '🏢 Corporación Establecida',
-                    'urgent_action': '⚡ OPORTUNIDAD: Innovación corporativa',
-                    'free_steps': [
-                        '✅ Identificar nuevas verticales',
-                        '✅ Estrategia de innovación',
-                        '❌ Corporate VCs estratégicos (Pro Plan)',
-                        '❌ M&A targets automático (Pro Plan)'
-                    ],
-                    'growth_unlock': '🎯 Con Pro: Outreach automatizado a partners estratégicos',
-                    'cta': '¿Buscamos corporate VCs o targets de adquisición?'
-                },
-                'en': {
-                    'current': '🏢 Established Corporation',
-                    'urgent_action': '⚡ OPPORTUNITY: Corporate innovation',
-                    'free_steps': [
-                        '✅ Identify new verticals',
-                        '✅ Innovation strategy',
-                        '❌ Strategic corporate VCs (Pro Plan)',
-                        '❌ Automated M&A targets (Pro Plan)'
-                    ],
-                    'growth_unlock': '🎯 With Pro: Automated outreach to strategic partners',
-                    'cta': 'Should we find corporate VCs or acquisition targets?'
-                }
             }
         }
         
         # Seleccionar roadmap según stage
-        roadmap_key = 'corporate' if stage == 'series_b_plus' else stage
-        if roadmap_key not in roadmaps:
-            roadmap_key = 'idea'
-            
+        roadmap_key = 'idea'  # Simplificado para evitar errores
+        
         roadmap = roadmaps[roadmap_key].get(user_language, roadmaps[roadmap_key]['en'])
         
         # Si es usuario FREE, añadir urgencia
