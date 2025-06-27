@@ -3101,7 +3101,7 @@ Just tell me which one and I'll generate it professionally."""
 - Búsqueda ML de 20+ inversores específicos
 - Filtros por industria, etapa, ubicación
 - 100,000 créditos de lanzamiento
-- Solo €20/mes
+- Solo $40/mes
 
 ¿Quieres que upgrade tu plan para buscar inversores ahora?""",
                     'en': """Perfect! You want to search for specific investors.
@@ -3112,7 +3112,7 @@ Just tell me which one and I'll generate it professionally."""
 - ML search of 20+ specific investors  
 - Filters by industry, stage, location
 - 100,000 launch credits
-- Only €20/month
+- Only $49/month
 
 Want to upgrade your plan to search investors now?"""
                 }
