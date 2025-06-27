@@ -5314,6 +5314,106 @@ def require_plan(required_plan):
 @app.route('/investors', methods=['GET'])
 @require_auth
 def get_all_investors(user):
+    """
+    Obtiene lista paginada de todos los inversores para el frontend
+    """
+    try:
+        # Parámetros de paginación
+        page = int(request.args.get('page', 1))
+        per_page = min(int(request.args.get('per_page', 20)), 100)  # máximo 100
+        search = request.args.get('search', '').strip()
+        
+        offset = (page - 1) * per_page
+        
+        # Query base
+        base_query = """
+            SELECT 
+                id,
+                "Company_Name" as company_name,
+                "Company_Description" as description,
+                "Company_Location" as location,
+                "Investing_Stage" as investing_stages,
+                "Investment_Categories" as investment_categories,
+                "Company_Linkedin" as linkedin_url
+            FROM investors
+            WHERE "Company_Name" IS NOT NULL
+        """
+        
+        params = {"limit": per_page, "offset": offset}
+        
+        # Agregar filtro de búsqueda si existe
+        if search:
+            base_query += """
+                AND (
+                    "Company_Name" ILIKE :search 
+                    OR "Company_Description" ILIKE :search
+                    OR "Company_Location" ILIKE :search
+                    OR "Investment_Categories" ILIKE :search
+                )
+            """
+            params["search"] = f"%{search}%"
+        
+        base_query += " ORDER BY \"Company_Name\" LIMIT :limit OFFSET :offset"
+        
+        with engine.connect() as conn:
+            # Obtener inversores
+            result = conn.execute(text(base_query), params).fetchall()
+            
+            # Contar total para paginación
+            count_query = """
+                SELECT COUNT(*) FROM investors 
+                WHERE "Company_Name" IS NOT NULL
+            """
+            
+            if search:
+                count_query += """
+                    AND (
+                        "Company_Name" ILIKE :search 
+                        OR "Company_Description" ILIKE :search
+                        OR "Company_Location" ILIKE :search
+                        OR "Investment_Categories" ILIKE :search
+                    )
+                """
+                total_count = conn.execute(text(count_query), {"search": f"%{search}%"}).scalar()
+            else:
+                total_count = conn.execute(text(count_query)).scalar()
+        
+        # Formatear resultados
+        investors = []
+        for row in result:
+            investors.append({
+                'investor_id': str(row[0]),
+                'company_name': row[1] or '',
+                'description': (row[2] or '')[:300] + '...' if len(row[2] or '') > 300 else (row[2] or ''),
+                'location': row[3] or '',
+                'investing_stages': row[4] or '',
+                'investment_categories': row[5] or '',
+                'linkedin_url': row[6] or ''
+            })
+        
+        # Calcular paginación
+        total_pages = (total_count + per_page - 1) // per_page
+        has_next = page < total_pages
+        has_prev = page > 1
+        
+        return jsonify({
+            'success': True,
+            'investors': investors,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_count': total_count,
+                'total_pages': total_pages,
+                'has_next': has_next,
+                'has_prev': has_prev
+            },
+            'search_query': search,
+            'filters_applied': bool(search)
+        })
+        
+    except Exception as e:
+        print(f"❌ Error getting all investors: {e}")
+        return jsonify({'error': 'Could not get investors list'}), 500
         
 @app.route('/investors/<investor_id>/employees', methods=['GET'])
 @require_auth
