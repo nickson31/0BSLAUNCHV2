@@ -3211,7 +3211,7 @@ Want me to try a broader search?"""
                     # 4. GUARDAR INVERSORES EN EL PROYECTO
                     saved_count = save_investors_to_project_simple(
                         user['id'], 
-                        project_id, 
+                        project_id,
                         investors_found
                     )
                     
@@ -3223,9 +3223,9 @@ Want me to try a broader search?"""
                         credits_cost
                     )
                     
-                    # 6. CREAR TABLA PARA MOSTRAR EN EL CHAT (solo primeros 10)
+                    # 6. CREAR TABLA PARA MOSTRAR EN EL CHAT (solo primeros 21)
                     investors_table = create_investors_table_for_chat(
-                        investors_found[:21],  # Solo primeros 10 en chat
+                        investors_found[:21],
                         detected_language
                     )
                     
@@ -3234,24 +3234,42 @@ Want me to try a broader search?"""
                     investors_with_scores = []
                     for investor in investors_found:
                         investor_copy = investor.copy()
-                        investor_copy['match_score'] = random.randint(72, 99)
+                        investor_copy['match_score'] = random.randint(72, 98)
                         investors_with_scores.append(investor_copy)
                     
-                    # 8. AGREGAR isLiked a cada inversor
-                    with engine.connect() as conn:
-                        saved_result = conn.execute(
-                            text("""
-                                SELECT investor_id FROM project_saved_investors 
-                                WHERE project_id = :project_id
-                            """),
-                            {"project_id": project_id}
-                        ).fetchall()
-                        saved_investor_ids = {str(row[0]) for row in saved_result}
-                    
+                    # 8. VERIFICAR QUÉ INVERSORES ESTÁN GUARDADOS
+                    saved_investor_ids = set()
+                    if project_id and investors_found:  # Solo si hay inversores
+                        try:
+                            with engine.connect() as conn:
+                                # CREAR PLACEHOLDERS DINÁMICOS para evitar IN()
+                                investor_ids_to_check = [inv.get('investor_id') for inv in investors_found if inv.get('investor_id')]
+                                
+                                if investor_ids_to_check:  # Solo si hay IDs para verificar
+                                    placeholders = ','.join([f':id_{i}' for i in range(len(investor_ids_to_check))])
+                                    params = {f'id_{i}': inv_id for i, inv_id in enumerate(investor_ids_to_check)}
+                                    params['project_id'] = project_id
+                                    
+                                    saved_result = conn.execute(
+                                        text(f"""
+                                            SELECT investor_id FROM project_saved_investors 
+                                            WHERE project_id = :project_id AND investor_id IN ({placeholders})
+                                        """),
+                                        params
+                                    ).fetchall()
+                                    
+                                    saved_investor_ids = {str(row[0]) for row in saved_result}
+                                    print(f"✅ Verified {len(saved_investor_ids)} saved investors for project {project_id}")
+                                
+                        except Exception as e:
+                            print(f"⚠️ Error checking saved investors (non-critical): {e}")
+
                     # 9. AGREGAR isLiked a inversores
                     for investor in investors_with_scores:
-                        investor['isLiked'] = investor.get('investor_id') in saved_investor_ids
-                    
+                        investor_id = str(investor.get('investor_id', ''))
+                        investor['isLiked'] = investor_id in saved_investor_ids
+
+                    # 10. RESPUESTA CORREGIDA
                     return jsonify({
                         'success': True,
                         'bot': 'interactive_mentor',
@@ -3264,10 +3282,15 @@ Want me to try a broader search?"""
                         'investor_search_executed': True,
                         'investors_found': len(investors_found),
                         'loading_type': 'investors',
-                        'investors_saved': 0,
+                        'investors_saved': saved_count,  # USAR saved_count real
                         'search_query': user_message,
                         'investors_full_list': investors_with_scores,  # YA TIENE match_score e isLiked
-                        'investors_table': investors_table
+                        'investors_table': investors_table,
+                        'debug_info': {  # Para debugging
+                            'saved_count_reported': saved_count,
+                            'total_found': len(investors_found),
+                            'saved_ids_count': len(saved_investor_ids)
+                        }
                     })
                     
                 except Exception as search_error:
@@ -3883,6 +3906,17 @@ def check_which_investors_are_saved(user, project_id):
         if not isinstance(investor_ids, list):
             return jsonify({'error': 'investor_ids debe ser una lista'}), 400
         
+        # ✅ NUEVO: Manejar lista vacía
+        if len(investor_ids) == 0:
+            return jsonify({
+                'success': True,
+                'project_id': project_id,
+                'total_checked': 0,
+                'total_saved': 0,
+                'saved_investors': [],
+                'unsaved_investors': []
+            })
+        
         # Verificar que el proyecto pertenece al usuario
         with engine.connect() as conn:
             project_check = conn.execute(
@@ -3893,20 +3927,23 @@ def check_which_investors_are_saved(user, project_id):
             if not project_check:
                 return jsonify({'error': 'Proyecto no encontrado'}), 404
             
-            # Buscar cuáles ya están guardados
-            placeholders = ','.join([f':id_{i}' for i in range(len(investor_ids))])
-            params = {f'id_{i}': investor_id for i, investor_id in enumerate(investor_ids)}
-            params['project_id'] = project_id
-            
-            saved_result = conn.execute(
-                text(f"""
-                    SELECT investor_id FROM project_saved_investors 
-                    WHERE project_id = :project_id AND investor_id IN ({placeholders})
-                """),
-                params
-            ).fetchall()
-            
-            saved_investor_ids = [row[0] for row in saved_result]
+            # ✅ SEGURO: Solo ejecutar query si hay investor_ids
+            if investor_ids:
+                placeholders = ','.join([f':id_{i}' for i in range(len(investor_ids))])
+                params = {f'id_{i}': investor_id for i, investor_id in enumerate(investor_ids)}
+                params['project_id'] = project_id
+                
+                saved_result = conn.execute(
+                    text(f"""
+                        SELECT investor_id FROM project_saved_investors 
+                        WHERE project_id = :project_id AND investor_id IN ({placeholders})
+                    """),
+                    params
+                ).fetchall()
+                
+                saved_investor_ids = [row[0] for row in saved_result]
+            else:
+                saved_investor_ids = []
         
         return jsonify({
             'success': True,
