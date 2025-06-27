@@ -1962,7 +1962,7 @@ What's your current CAC and target LTV? That'll determine your pricing ceiling.
 
 CRITICAL: Never mention subscription plans unless user asks about limitations. Make upsell feel like natural mentorship.
 
-Respond now as Alex Chen:
+Respond now as A REAL DEAL STARTUP MENTOR AND THERAPIST FOR SUCCESS:
 """
         
         return prompt
