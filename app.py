@@ -222,13 +222,31 @@ def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
 
 def verify_password(password, hashed):
-    """Verifica password contra hash"""
+    """Verifica password contra hash - CON DEBUG"""
+    print(f"🔐 verify_password called:")
+    print(f"   - password: '{password}' (length: {len(password)})")
+    print(f"   - hashed: '{hashed}' (length: {len(hashed)})")
+    
     if not password or not hashed:
+        print("❌ Password o hash están vacíos")
         return False
+    
     try:
-        return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+        # Intentar verificación
+        password_bytes = password.encode('utf-8')
+        hashed_bytes = hashed.encode('utf-8')
+        
+        print(f"   - password_bytes: {password_bytes}")
+        print(f"   - hashed_bytes: {hashed_bytes[:30]}...")
+        
+        result = bcrypt.checkpw(password_bytes, hashed_bytes)
+        print(f"   - bcrypt result: {result}")
+        
+        return result
     except Exception as e:
-        print(f"Error verifying password: {e}")
+        print(f"❌ Error verifying password: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def generate_jwt_token(user_id):
