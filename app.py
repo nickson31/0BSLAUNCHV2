@@ -214,41 +214,6 @@ def get_bot_credit_cost(bot_id):
     """Obtiene el costo en créditos de un bot"""
     return CREDIT_COSTS.get(bot_id, 5)
 
-def hash_password(password):
-    """Hash password usando bcrypt"""
-    if not password:
-        return None
-    salt = bcrypt.gensalt()
-    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
-
-def verify_password(password, hashed):
-    """Verifica password contra hash - CON DEBUG"""
-    print(f"🔐 verify_password called:")
-    print(f"   - password: '{password}' (length: {len(password)})")
-    print(f"   - hashed: '{hashed}' (length: {len(hashed)})")
-    
-    if not password or not hashed:
-        print("❌ Password o hash están vacíos")
-        return False
-    
-    try:
-        # Intentar verificación
-        password_bytes = password.encode('utf-8')
-        hashed_bytes = hashed.encode('utf-8')
-        
-        print(f"   - password_bytes: {password_bytes}")
-        print(f"   - hashed_bytes: {hashed_bytes[:30]}...")
-        
-        result = bcrypt.checkpw(password_bytes, hashed_bytes)
-        print(f"   - bcrypt result: {result}")
-        
-        return result
-    except Exception as e:
-        print(f"❌ Error verifying password: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
 def generate_jwt_token(user_id):
     """Genera JWT token para el usuario"""
     try:
