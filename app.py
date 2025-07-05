@@ -3500,6 +3500,45 @@ def get_conversation_messages(user, conversation_id):
         print(f"Error getting conversation: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/debug/login', methods=['POST'])
+def debug_login():
+    try:
+        data = request.get_json()
+        email = data.get('email', '')
+        password = data.get('password', '')
+        
+        print(f"🔍 Debug login: {email}")
+        
+        # Paso 1: Buscar usuario
+        user = get_user_by_email(email)
+        if not user:
+            return jsonify({
+                'step': 'user_lookup',
+                'found': False,
+                'email': email
+            })
+        
+        print(f"✅ Usuario encontrado: {user['email']}")
+        
+        # Paso 2: Verificar password
+        is_valid = verify_password(password, user.get('password_hash'))
+        print(f"🔐 Password válido: {is_valid}")
+        
+        return jsonify({
+            'step': 'password_verification',
+            'user_found': True,
+            'email': email,
+            'hash_preview': user.get('password_hash', '')[:20] + '...',
+            'password_valid': is_valid,
+            'auth_provider': user.get('auth_provider'),
+            'is_active': user.get('is_active')
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'step': 'error',
+            'error': str(e)
+        })
 @app.route('/chat/stats', methods=['GET'])
 @require_auth
 def get_chat_stats(user):
