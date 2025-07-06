@@ -269,6 +269,200 @@ def require_plan(required_plan):
         return decorated_function
     return decorator
 
+# ==============================================================================
+#           PASSWORD UTILITIES - AÑADIR DESPUÉS DE LOS IMPORTS
+# ==============================================================================
+
+def hash_password(password):
+    """
+    Hashea una contraseña usando bcrypt
+    """
+    try:
+        if not password:
+            return None
+        
+        # Convertir string a bytes
+        password_bytes = password.encode('utf-8')
+        
+        # Generar salt y hashear
+        salt = bcrypt.gensalt()
+        hashed = bcrypt.hashpw(password_bytes, salt)
+        
+        # Retornar como string
+        return hashed.decode('utf-8')
+        
+    except Exception as e:
+        print(f"❌ Error hashing password: {e}")
+        return None
+
+def verify_password(password, hashed_password):
+    """
+    Verifica una contraseña contra su hash
+    """
+    try:
+        if not password or not hashed_password:
+            return False
+        
+        # Convertir a bytes
+        password_bytes = password.encode('utf-8')
+        
+        # Si el hash está como string, convertir a bytes
+        if isinstance(hashed_password, str):
+            hashed_bytes = hashed_password.encode('utf-8')
+        else:
+            hashed_bytes = hashed_password
+        
+        # Verificar con bcrypt
+        return bcrypt.checkpw(password_bytes, hashed_bytes)
+        
+    except Exception as e:
+        print(f"❌ Error verifying password: {e}")
+        return False
+
+# ==============================================================================
+#           EJEMPLO DE VALIDACIÓN ADICIONAL DE CONTRASEÑA
+# ==============================================================================
+
+def validate_password_strength_extended(password):
+    """
+    Validación extendida de fortaleza de contraseña
+    """
+    if not password:
+        return False, "La contraseña es requerida"
+    
+    if len(password) < 8:
+        return False, "La contraseña debe tener al menos 8 caracteres"
+    
+    if len(password) > 128:
+        return False, "La contraseña es demasiado larga (máximo 128 caracteres)"
+    
+    # Verificar al menos una mayúscula
+    if not any(c.isupper() for c in password):
+        return False, "La contraseña debe contener al menos una letra mayúscula"
+    
+    # Verificar al menos una minúscula
+    if not any(c.islower() for c in password):
+        return False, "La contraseña debe contener al menos una letra minúscula"
+    
+    # Verificar al menos un número
+    if not any(c.isdigit() for c in password):
+        return False, "La contraseña debe contener al menos un número"
+    
+    # Verificar al menos un carácter especial
+    special_chars = "!@#$%^&*()_+-=[]{}|;:,.<>?"
+    if not any(c in special_chars for c in password):
+        return False, "La contraseña debe contener al menos un carácter especial"
+    
+    # Verificar que no sea una contraseña común
+    common_passwords = [
+        "password", "123456", "password123", "admin", "qwerty",
+        "letmein", "welcome", "monkey", "1234567", "password1"
+    ]
+    
+    if password.lower() in common_passwords:
+        return False, "La contraseña es demasiado común, elige una más segura"
+    
+    return True, "Contraseña válida"
+
+# ==============================================================================
+#           FUNCIONES DE TESTING (OPCIONAL)
+# ==============================================================================
+
+def test_password_functions():
+    """
+    Función para testear las utilidades de contraseña
+    """
+    print("🔐 Testing password functions...")
+    
+    # Test 1: Hash y verificación básica
+    test_password = "MiContraseña123!"
+    hashed = hash_password(test_password)
+    
+    if hashed:
+        print(f"✅ Hash generado: {hashed[:30]}...")
+        
+        # Verificar contraseña correcta
+        if verify_password(test_password, hashed):
+            print("✅ Verificación correcta: PASS")
+        else:
+            print("❌ Verificación correcta: FAIL")
+        
+        # Verificar contraseña incorrecta
+        if not verify_password("ContraseñaIncorrecta", hashed):
+            print("✅ Verificación incorrecta: PASS")
+        else:
+            print("❌ Verificación incorrecta: FAIL")
+    else:
+        print("❌ Error generando hash")
+    
+    # Test 2: Validación de fortaleza
+    weak_passwords = ["123", "password", "abc"]
+    strong_passwords = ["MiContraseña123!", "Segura@2024", "C0mpl3x$Pass"]
+    
+    print("\n🔍 Testing password strength...")
+    
+    for pwd in weak_passwords:
+        is_valid, message = validate_password_strength_extended(pwd)
+        print(f"❌ '{pwd}': {message}")
+    
+    for pwd in strong_passwords:
+        is_valid, message = validate_password_strength_extended(pwd)
+        print(f"✅ '{pwd}': {message}")
+
+# ==============================================================================
+#           INTEGRACIÓN CON TU CÓDIGO EXISTENTE
+# ==============================================================================
+
+# En tu código actual, puedes reemplazar validate_password_strength 
+# con validate_password_strength_extended para mayor seguridad.
+
+# También podrías añadir un endpoint para cambiar contraseña:
+
+
+@app.route('/auth/change-password', methods=['POST'])
+@require_auth
+def change_password(user):
+    try:
+        data = request.get_json()
+        
+        current_password = data.get('current_password')
+        new_password = data.get('new_password')
+        
+        if not current_password or not new_password:
+            return jsonify({'error': 'Current and new password required'}), 400
+        
+        # Verificar contraseña actual
+        if not verify_password(current_password, user.get('password_hash')):
+            return jsonify({'error': 'Current password is incorrect'}), 401
+        
+        # Validar nueva contraseña
+        is_valid, message = validate_password_strength_extended(new_password)
+        if not is_valid:
+            return jsonify({'error': message}), 400
+        
+        # Hashear nueva contraseña
+        new_hash = hash_password(new_password)
+        if not new_hash:
+            return jsonify({'error': 'Could not hash new password'}), 500
+        
+        # Actualizar en base de datos
+        with engine.connect() as conn:
+            conn.execute(
+                text("UPDATE users SET password_hash = :hash, updated_at = NOW() WHERE id = :user_id"),
+                {"hash": new_hash, "user_id": user['id']}
+            )
+            conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Password changed successfully'
+        })
+        
+    except Exception as e:
+        print(f"❌ Error changing password: {e}")
+        return jsonify({'error': 'Could not change password'}), 500
+
+
 def ml_investor_search(query, user_preferences, max_results=20):
     """
     Función principal de búsqueda ML de inversores - VERSIÓN CORREGIDA
